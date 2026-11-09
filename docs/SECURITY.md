@@ -31,3 +31,7 @@ An automated scan is not proof that every possible vulnerability or form of sens
 References: [OWASP browser request isolation](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html), [Node filesystem permissions](https://nodejs.org/api/fs.html).
 
 Approved documentation images use the synthetic read-only demo. They contain no owner device state, and all numerical values and model names are illustrative. Native credential-store encryption and Docker packaging remain unimplemented in this release.
+
+## Optional external web search
+
+Search is off by default. When explicitly enabled for a chat or workflow step, the query (or current prompt if no query is supplied) leaves the local setup over HTTPS to DuckDuckGo or Brave Search. No conversation history, attachments, or Tiiny key are sent to the search provider. Queries/results are saved in local run history. Brave credentials are separate, kept in helper memory only, never returned to the UI or written to runs/workflows. Forget the key or restart the helper to clear it. Search results are untrusted text, rendered escaped and supplied as evidence with instructions to disregard embedded commands. Models can still be misled by source content; review claims and citations. Full-page fetching and model-selected tool execution are not implemented.

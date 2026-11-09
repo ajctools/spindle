@@ -4,7 +4,7 @@
 
 **A creative companion for Tiiny AI.** One local workspace for chat, images, audio, video, documents, 3D, model discovery, repeatable workflows, and a dashboard that remembers how your work performed.
 
-**Preview v0.4.2 · MIT license · Node.js 22+ · No Tiiny SDK required**
+**Preview v0.5.0 · MIT license · Node.js 22+ · No Tiiny SDK required**
 
 > [!CAUTION]
 > **READ BEFORE CONNECTING — LOCAL, SINGLE-USER SOFTWARE**
@@ -13,6 +13,8 @@
 > - **Remembered API keys are plaintext in this release.** Leave “Remember on this computer” off for a session-only Spindle connection. OS keychain encryption is **not implemented**. Existing CLI/environment credentials are separate.
 > - **Do not expose the helper server to the internet or other users.** There is no multi-user login. Docker packaging is **not implemented**.
 > - **Data stays private only if you handle it privately.** Runs, media, inventories, and exports can contain sensitive information. Never publish `data/`, actual environment files, or CLI configuration.
+>
+> - **Web search is optional and external.** When enabled, the explicit search query (or current prompt) goes to DuckDuckGo or Brave over HTTPS. Search is off by default. Brave requires a separate API key, held only in server memory. Queries and results remain in local run history.
 >
 > Read [Security & privacy](docs/SECURITY.md). A local audit is not a guarantee that every vulnerability has been found.
 
@@ -52,7 +54,7 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 
 | Workspace | What you can do |
 | --- | --- |
-| Chat & vision | Write, code, converse, and ask about an image |
+| Chat & vision | Stream replies, inspect model-provided thinking, optionally search the web, and ask about images |
 | Images | Generate an image or use a supported reference-image model |
 | Transcribe / Speech / Music | Convert recordings to text, synthesize speech, and generate music |
 | Video | Generate a clip or animate a starting image, with job progress and saved output |
@@ -63,6 +65,16 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 
 > [!WARNING]
 > **Model listings are device-reported metadata, not a compatibility guarantee.** Firmware and runtimes change. Test small inputs first. Model switching unloads models and can affect other clients; restoration can fail after a disconnect or shutdown.
+
+## Chat with thinking and web sources
+
+Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
+
+Enable **Search the web before each message** to supply up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. Full pages are not fetched, citations are model-generated, and source claims need checking. No SDK is required.
+
+![Thinking controls, source links, and the web-search privacy notice](docs/images/chat.jpg)
+
+*Chat UI validation: synthetic model and answer, with a live public search query. The pictured response is not a device-generated answer.*
 
 ## A dashboard with context
 
@@ -95,4 +107,4 @@ Run `node --test test/*.test.mjs` for isolated tests with fabricated credentials
 
 Build a clean source release with `node scripts/release.mjs --out <new-directory>`. The builder copies an explicit manifest and checks known local identifiers and credential patterns. Publish only that clean folder or its archive.
 
-MIT licensed. See [LICENSE](LICENSE). Current limitations include non-streaming chat, sequential workflows, no automatic branching/tool execution, a shape-stage 3D adapter, and no guarantee of model restoration after a terminated server.
+MIT licensed. See [LICENSE](LICENSE). Current limitations include sequential workflows, no automatic branching/tool execution, a shape-stage 3D adapter, and no guarantee of model restoration after a terminated server.

@@ -31,7 +31,7 @@ Once connected, **Dashboard** is the default landing view, including after a fre
 
 - Filter local history by 7/30/90 days or all time, capability, model, and benchmark samples. CSV and JSON exports contain the full filtered history; the screen shows the latest 50 detailed records.
 - Track input/output/total tokens from response bodies, runtime timings, JSON usage headers, or individual token headers. Image and video tokens are retained when supplied, alongside media counts, dimensions, frames, and durations. Unreported token usage stays missing; media counts are never treated as tokens.
-- Compare median and p95 execution times, runtime decode/prefill t/s, video generation frames/s, and audio output seconds per processing second. Spindle measures execution separately from model preparation and restoration. First-token latency is not measured by the current non-streaming client.
+- Compare median and p95 execution times, runtime decode/prefill t/s, video generation frames/s, and audio output seconds per processing second. Spindle measures execution separately from model preparation and restoration. First-token latency is not yet recorded. Web-enabled execution times include the search request; compare benchmarks with web search disabled.
 - Run the **Spindle text v1** benchmark with 1, 3, or 5 sequential samples on an already loaded chat model. Its fixed prompt, output-token cap, temperature, seed, model/version, and timing data are recorded. The text-baseline chart preserves a speed timeline. Prompt caching and concurrent device work can affect results.
 - Read actual NPU activity, CPU, RAM, NPU memory, storage, and model reservation. Live polling runs while the dashboard is open and visible. Samples retain up to 24 hours / 3,000 points, checkpointed approximately every minute. Missing intervals are not connected in the trace.
 - TiinyOS’s weekly device counter is shown as a **separate ledger**, with previous-week navigation. It can overlap Spindle records and may exclude media; its totals are never added to Spindle totals.
@@ -59,6 +59,20 @@ The measurement guide explains coverage, timing, and fair comparisons. An exact 
 Advanced JSON exposes model-specific parameters. Runtime info reads the selected running model's own capabilities and defaults. Short video previews use supported canvases and step options when available.
 
 **Test capability** runs a real sample and records its result under **Device → Capability readiness**. Some models take several minutes to load or generate. Preparation, execution, progress, and restoration are shown separately.
+
+## Chat controls and web search
+
+**Thinking mode** uses the Tiiny `chat_template_kwargs.enable_thinking` control when a model reports a toggle. **Reasoning effort** lists only reported levels. Model default sends no override. Returned `reasoning_content`, `reasoning`, `thinking`, and `<think>` blocks appear separately in a collapsed Thinking panel, including while streaming. These are model-provided text, not a guarantee that all internal reasoning is exposed. Reasoning and source cards remain in local run history. Only the answer is passed onward to workflow steps.
+
+**Show the response as it arrives** is on by default. The helper decodes SSE and retains usage/timings from final stream events. JSON responses are also accepted. If firmware rejects the stream request, turn this option off; Spindle does not automatically repeat a request that might have already run. A partial response remains visible after a stream failure. A token-limit notice recommends increasing `max_tokens` or asking to continue.
+
+**Search the web before each message** is off by default. Enabling it sends only the explicit search query—or the current prompt when the query field is blank—to the chosen provider. Use an explicit, short query to keep sensitive material out of searches. Conversation history, image attachments, and the Tiiny key are not sent to the search provider. Search-enabled workflow steps use these same settings; saved workflows keep the choice and query, never the Brave key.
+
+- **DuckDuckGo:** keyless, best-effort HTML search over HTTPS. It may return no results, rate-limit requests, change its markup, or require a browser verification. Spindle stops the run with an actionable error; it does not bypass verification.
+- **Brave Search:** configure a separate Brave Search API key in the chat controls ([provider documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)). It is held in the local helper’s memory until **Forget search key** or restart, shared only within this single-user helper. No disk or browser-storage persistence. API quotas or charges depend on your Brave account.
+- Each answer can use up to five snippets. Sources display titles, links, snippets, query, provider, and retrieval time. Spindle does not fetch the full result pages or run model-selected tools. Model citations such as `[1]` can be wrong; verify the corresponding source.
+- Search requests use fixed HTTPS destinations, no Tiiny credentials, no redirects, bounded response sizes, and timeouts. A failed search stops the run rather than producing an answer without the requested evidence.
+- Search queries and snippets are saved locally with the run. Internet access is required only when searching. Inference continues to use your configured Tiiny endpoint and its HTTP/TLS limitations.
 
 ## Guidance that stays close to the task
 

@@ -8,6 +8,8 @@ import {tasks,list,normalize,csv,parseDataUrl,validatePCM,transcriptionPCM,expan
 import {normalizeConnection,deviceURL,publicConnection} from './connection.mjs';
 import {cleanHardware,requestAccess,redactError} from './security.mjs';
 import {MetricStore,usageFrom,mergeUsage,mediaFromBuffer,mediaFromResponse,createMetric,summarize,filterMetrics,summarizeResources,metricsCSV} from './metrics.mjs';
+import {chatSettings,readChatResponse} from './chat.mjs';
+import {searchWeb,searchContext} from './web-search.mjs';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url)), DATA=process.env.SPINDLE_DATA_DIR || path.join(ROOT,'data');
 await fs.mkdir(DATA,{recursive:true,mode:0o700}); await fs.mkdir(path.join(DATA,'assets'),{recursive:true,mode:0o700});
@@ -18,6 +20,7 @@ const secret=randomBytes(24).toString('hex');
 let cached=null, jobs=[], workflows=[], active=false, saveChain=Promise.resolve(), refreshPromise=null;
 const controllers=new Map();
 let sessionConnection=null;
+let searchKey=''; // Brave credentials are session-only, never part of runs or release data.
 const metricStore=await new MetricStore(DATA).load();
 let telemetry=[],telemetryPromise=null,ledgerCache=null,ledgerPromise=null;
 async function readJSON(file,fallback){try{return JSON.parse(await fs.readFile(path.join(DATA,file),'utf8'));}catch{return fallback;}}
@@ -137,11 +140,18 @@ async function execute(step,signal,job){
   const live=list(await remoteJSON('/v1/models',{transport:'openai',timeout:15000}));
   if(!live.some(m=>m.id===model.id))throw new Error(model.name+' is not loaded. Load it in Models, then run again. Spindle never evicts other models automatically.');
   const {_spindlePreview,...p}=step.params || {}, prompt=step.prompt || '', file=step.file;
+  let webSearch=null;
   let route=t.route,body,transport=t.transport || 'native';
   if(step.task==='chat'){
     const message={role:'user',content:file?[{type:'text',text:prompt},{type:'image_url',image_url:{url:file.data}}]:prompt};
     if(file&&!String(model.input).includes('Image'))throw new Error('This model does not report image input support.');
-    body={model:model.id,messages:[...(step.messages || []),message],max_tokens:1024,...p,stream:false};
+    if(p._spindleWebSearch?.enabled){
+      job.phase='Searching the web';await saveJobs();
+      webSearch=await searchWeb({...p._spindleWebSearch,query:p._spindleWebSearch.query || prompt,key:searchKey,signal});
+      job.phase='Generating answer with web sources';
+      job.partial={task:'chat',model:model.id,text:'',reasoning:'',webSearch};await saveJobs();
+    }
+    body={max_tokens:2048,...chatSettings(p,model),model:model.id,messages:[...(webSearch?[searchContext(webSearch)]:[]),...(step.messages || []).map(({role,content})=>({role,content})),message]};
   }else if(step.task==='image'){
     if(file)body={model:model.id,prompt,image:file.data,...p};
     else{
@@ -182,6 +192,16 @@ async function execute(step,signal,job){
   // The selected model is always pinned, including advanced settings.
   if(!(body instanceof FormData)&&step.task!=='ocr')body.model=model.id;
   const r=await remote(route,{method:'POST',body,transport,signal});
+  if(step.task==='chat'){
+    let result;
+    try{result=await readChatResponse(r,{signal,onUpdate:partial=>{
+        job.partial={task:'chat',model:model.id,...partial,...(webSearch?{webSearch}:{})};
+        job.phase=partial.text?'Writing answer':partial.reasoning?'Thinking':'Waiting for response';
+      }});
+    }catch(e){const c=await config();throw new Error(redactError(e,[c.key,searchKey]));}
+    delete job.partial;
+    return {...result,assets:[],metrics:usageFrom(result.json,r.headers),...(webSearch?{webSearch}:{})};
+  }
   if(step.task==='video'||step.task==='mesh'){
     let j=await r.json(),jobUsage=usageFrom(j,r.headers);const d=j.data || j,id=d.id || d.task_id;if(!id)throw new Error('Tiiny returned no job ID: '+JSON.stringify(j).slice(0,700));
     const base=step.task==='video'?'/v1/videos/':'/v1/3d/tasks/';
@@ -350,6 +370,11 @@ const server=http.createServer(async(req,res)=>{
       sessionConnection=null;await fs.rm(path.join(DATA,'connection.json'),{force:true});cached=null;send(res,{ok:true});return;
     }
     if(p==='/api/runs'&&req.method==='GET'){send(res,jobs.map(redactJob));return;}
+    if(p==='/api/search/settings'&&req.method==='GET'){send(res,{braveKeyPresent:!!searchKey});return;}
+    if(p==='/api/search/settings'&&req.method==='POST'){
+      const b=await jsonBody(req);if(typeof b.key!=='string'||b.key.length>500)throw new Error('Enter a valid Brave Search key.');
+      searchKey=b.key.trim();send(res,{braveKeyPresent:!!searchKey});return;
+    }
     if(p==='/api/telemetry'&&req.method==='GET'){send(res,await liveTelemetry());return;}
     if(p==='/api/device-ledger'&&req.method==='GET'){
       const start=u.searchParams.get('start');if(!/^\d{4}-\d{2}-\d{2}$/.test(start || ''))throw new Error('Choose a valid week start.');send(res,await deviceLedger(start));return;
@@ -379,13 +404,13 @@ const server=http.createServer(async(req,res)=>{
         const count=Number(b.repeats || 3);if(![1,3,5].includes(count))throw new Error('Choose 1, 3, or 5 samples.');
         const live=list(await remoteJSON('/v1/models',{transport:'openai'}));const m=cached.models.find(m=>m.id===b.model&&m.tasks.includes('chat'));
         if(!m||!live.some(x=>x.id===m.id))throw new Error('Load a text or vision chat model before benchmarking.');
-        b.name='Text benchmark · '+m.name;b.steps=Array.from({length:count},()=>({task:'chat',model:m.id,prompt:'Write a clear, factual guide to organizing a small community project. Explain planning, communication, and follow-through in connected prose.',params:{max_tokens:128,temperature:0,seed:42,...(m.thinking?.toggleable?{thinking_enabled:false}:{})}}));b.switchModels=false;b.benchmark=true;
+        b.name='Text benchmark · '+m.name;b.steps=Array.from({length:count},()=>({task:'chat',model:m.id,prompt:'Write a clear, factual guide to organizing a small community project. Explain planning, communication, and follow-through in connected prose.',params:{max_tokens:128,temperature:0,seed:42,...(m.thinking?.toggleable?{chat_template_kwargs:{enable_thinking:false}}:{})}}));b.switchModels=false;b.benchmark=true;
       }
       if(p==='/api/check'){
         if(!tasks[b.task])throw new Error('Choose a capability to check.');
         const fixture=async(name,mime)=>({name,data:'data:'+mime+';base64,'+(await fs.readFile(path.join(ROOT,'fixtures',name))).toString('base64')});
         const sample={task:b.task,model:b.model,prompt:'Spindle keeps my ideas on my own device.',params:{}};
-        if(b.task==='chat'){if(String(cached.models.find(m=>m.id===b.model)?.input).includes('Image')){sample.prompt='Describe the shape and colors in this image in one sentence.';sample.file=await fixture('star.png','image/png');}sample.params={thinking_enabled:false,max_tokens:100};}
+        if(b.task==='chat'){if(String(cached.models.find(m=>m.id===b.model)?.input).includes('Image')){sample.prompt='Describe the shape and colors in this image in one sentence.';sample.file=await fixture('star.png','image/png');}sample.params={max_tokens:100,...(cached.models.find(m=>m.id===b.model)?.thinking?.toggleable?{chat_template_kwargs:{enable_thinking:false}}:{})};}
         if(b.task==='image'){sample.prompt='A bright green geometric star on a dark green background, no text';sample.params={width:512,height:512,steps:8};}
         if(b.task==='asr')sample.file=await fixture('speech.wav','audio/wav');
         if(b.task==='ocr')sample.file=await fixture('document.png','image/png');
@@ -421,7 +446,7 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/catalog.csv'){file=path.join(DATA,'catalog.csv');mime='text/csv';}
     else if(/^\/assets\/[a-f0-9-]+\.[a-z0-9]+$/.test(p)){
       file=path.join(DATA,'assets',path.basename(p));mime=({'png':'image/png','jpg':'image/jpeg','wav':'audio/wav','mp3':'audio/mpeg','mp4':'video/mp4','glb':'model/gltf-binary','json':'application/json'})[p.split('.').pop()] || 'application/octet-stream';
-    }else if(['/','/index.html','/app.js','/styles.css','/experience.css','/effects.js','/audio.js','/guidance.mjs','/guidance.css','/dashboard.js','/dashboard.css','/favicon.svg'].includes(p)){
+    }else if(['/','/index.html','/app.js','/chat-ui.mjs','/styles.css','/experience.css','/effects.js','/audio.js','/guidance.mjs','/guidance.css','/dashboard.js','/dashboard.css','/favicon.svg'].includes(p)){
       file=path.join(ROOT,'public',p==='/'?'index.html':p.slice(1));mime=p.endsWith('.js')||p.endsWith('.mjs')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.svg')?'image/svg+xml':'text/html';
     }else{send(res,{error:'Not found'},404);return;}
     const bytes=await fs.readFile(file);res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
