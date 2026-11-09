@@ -1,0 +1,11 @@
+# All personal device settings, credentials, histories, and generated media
+data/
+.env
+.env.*
+!.env.example
+node_modules/
+*.log
+test/.runtime-*/
+.release-check/
+.DS_Store
+Thumbs.db
