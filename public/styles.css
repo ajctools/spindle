@@ -10,3 +10,5 @@
 .chat-sources{margin-top:14px}.chat-sources ol{padding-left:24px}.chat-sources li{margin:12px 0;font-size:12px;overflow-wrap:anywhere}.chat-sources li p{color:var(--muted);font-size:11px;margin-top:5px}.chat-message .output-text{white-space:pre-wrap}
 
 @media(min-width:1100px){.work-grid>.panel:last-child{position:sticky;top:20px}.work-grid .output-area{max-height:calc(100vh - 110px);overflow:auto}}
+
+#custom-token-field[hidden]{display:none}

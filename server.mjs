@@ -151,7 +151,7 @@ async function execute(step,signal,job){
       job.phase='Generating answer with web sources';
       job.partial={task:'chat',model:model.id,text:'',reasoning:'',webSearch};await saveJobs();
     }
-    body={max_tokens:2048,...chatSettings(p,model),model:model.id,messages:[...(webSearch?[searchContext(webSearch)]:[]),...(step.messages || []).map(({role,content})=>({role,content})),message]};
+    body={...chatSettings(p,model),model:model.id,messages:[...(webSearch?[searchContext(webSearch)]:[]),...(step.messages || []).map(({role,content})=>({role,content})),message]};
   }else if(step.task==='image'){
     if(file)body={model:model.id,prompt,image:file.data,...p};
     else{
@@ -200,7 +200,7 @@ async function execute(step,signal,job){
       }});
     }catch(e){const c=await config();throw new Error(redactError(e,[c.key,searchKey]));}
     delete job.partial;
-    return {...result,assets:[],metrics:usageFrom(result.json,r.headers),...(webSearch?{webSearch}:{})};
+    return {...result,responseLimit:body.max_tokens ?? body.max_completion_tokens ?? null,assets:[],metrics:usageFrom(result.json,r.headers),...(webSearch?{webSearch}:{})};
   }
   if(step.task==='video'||step.task==='mesh'){
     let j=await r.json(),jobUsage=usageFrom(j,r.headers);const d=j.data || j,id=d.id || d.task_id;if(!id)throw new Error('Tiiny returned no job ID: '+JSON.stringify(j).slice(0,700));

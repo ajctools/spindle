@@ -4,7 +4,7 @@
 
 **A creative companion for Tiiny AI.** One local workspace for chat, images, audio, video, documents, 3D, model discovery, repeatable workflows, and a dashboard that remembers how your work performed.
 
-**Preview v0.5.0 · MIT license · Node.js 22+ · No Tiiny SDK required**
+**Preview v0.5.1 · MIT license · Node.js 22+ · No Tiiny SDK required**
 
 > [!CAUTION]
 > **READ BEFORE CONNECTING — LOCAL, SINGLE-USER SOFTWARE**
@@ -67,6 +67,8 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 > **Model listings are device-reported metadata, not a compatibility guarantee.** Firmware and runtimes change. Test small inputs first. Model switching unloads models and can affect other clients; restoration can fail after a disconnect or shutdown.
 
 ## Chat with thinking and web sources
+
+**Chat no longer adds a 2,048-token cap by default.** The visible Maximum response tokens control offers model defaults, presets, and a custom limit. Reasoning can share the output budget; device output/context limits still apply.
 
 Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
 

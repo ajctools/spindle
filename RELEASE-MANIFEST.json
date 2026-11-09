@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.5.1",
   "files": [
     {
       "path": ".env.example",
@@ -18,8 +18,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "f6348d92b14622d117b03a719f0424674e6c977389cf0da6b4eb68f5df4b5a5a",
-      "bytes": 8272
+      "sha256": "8c460090a0d26697635e8080b52dca58649d330e80c8c9dd85cb1ac09c1e651e",
+      "bytes": 8504
     },
     {
       "path": "Start-Spindle.ps1",
@@ -28,13 +28,13 @@
     },
     {
       "path": "package.json",
-      "sha256": "4e5a89fab7123862cdaeb74cf5d44a46302b6170dfaef6bede1befb147f62d7d",
+      "sha256": "6201b9d858bf1562c46b0fa4b66fdeb7bdec34405d1e879270fbc0a070ab7bf2",
       "bytes": 291
     },
     {
       "path": "server.mjs",
-      "sha256": "45af5ae6686f44b22e12cf30c3dbe5f7e96511fe3e4f0be9a9e4cf298b8734dc",
-      "bytes": 43345
+      "sha256": "6a63bc93488c2cc855977681e98260d1ecdd1b6a11f32ff558f0b62599d207ad",
+      "bytes": 43397
     },
     {
       "path": "core.mjs",
@@ -58,8 +58,8 @@
     },
     {
       "path": "chat.mjs",
-      "sha256": "7adf713e203a19254559b949defe7cf64e6246ac46d76a55a33b13fdf5473f97",
-      "bytes": 4697
+      "sha256": "9feadaea80f683e56f9e01d9acbd59c5fea497441f924c3964121e647dc49147",
+      "bytes": 5167
     },
     {
       "path": "web-search.mjs",
@@ -98,8 +98,8 @@
     },
     {
       "path": "docs/USAGE.md",
-      "sha256": "5975c362a9720542e36afa68b3ec48e70bd3b210319013ee382f038acf57049d",
-      "bytes": 13808
+      "sha256": "79c4c90ff68f1138eeb44724b9d2c6922911c3b7902b2e54b8ca783e10211b8f",
+      "bytes": 14638
     },
     {
       "path": "scripts/release.mjs",
@@ -148,13 +148,13 @@
     },
     {
       "path": "public/app.js",
-      "sha256": "7587b8df5d2faa91d59cfaeed72ebf6a6b5eac6b2aa8057c1c23ae197ec0a56b",
-      "bytes": 64616
+      "sha256": "267e67794179387df9cc01ea896e0aad53d7ee5c38ed2002a8487bbae1ad2153",
+      "bytes": 66343
     },
     {
       "path": "public/chat-ui.mjs",
-      "sha256": "1d62e7be971c49a776afad412b462740f04a192fde6faf0e40ce9b25a41fd2d5",
-      "bytes": 1402
+      "sha256": "275b8ee5758f7e99506695824f779241c00176b2522fd95062a14a0e399a5ccd",
+      "bytes": 2659
     },
     {
       "path": "public/audio.js",
@@ -188,8 +188,8 @@
     },
     {
       "path": "public/guidance.mjs",
-      "sha256": "83ddc9538d641bf073e187e06a6634b75bd6783812b2f6440e74d196d83488ba",
-      "bytes": 20120
+      "sha256": "400edc91766ac154a1c8a9387ab1b8e1188ec5812f10331660cd1abcc168b9e8",
+      "bytes": 20328
     },
     {
       "path": "public/guidance.css",
@@ -198,13 +198,13 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "4fa2c2263760e91065a6980e4b1ddd01020628ff0f1456fd780ddc772cb8332e",
+      "sha256": "af1c46e2d50dcba2253206e3ce0b6a8a9c498ac5c6e48b3a1f361cdc810e1df8",
       "bytes": 3093
     },
     {
       "path": "public/styles.css",
-      "sha256": "633ff0a41ca7a265dacaf4e66403696238689a26c4e95ba740dca39b25a688ad",
-      "bytes": 12965
+      "sha256": "3bd9923b0e5df1448220044a0270f6f793422606a68b0ae2a28a961cff70d99d",
+      "bytes": 13008
     },
     {
       "path": "fixtures/document.png",
@@ -228,8 +228,8 @@
     },
     {
       "path": "test/chat.test.mjs",
-      "sha256": "22e30392ef624ff7dc54f75732323a16e8ef7cbc46102799fa295e6eaae688e0",
-      "bytes": 4913
+      "sha256": "f6d8aa3895ad724f10b13865f71853775ea9768c8f92fc39dd74ebb27dec9186",
+      "bytes": 6633
     },
     {
       "path": "test/search.test.mjs",
@@ -253,8 +253,8 @@
     },
     {
       "path": "test/integration.test.mjs",
-      "sha256": "33fc3a8cfc1987378d8e34c0f9b6ff51fe15905632d9e921593e01480461e752",
-      "bytes": 7174
+      "sha256": "c5b0cd76485f9527094c10bbc11c0d3b9c6d09c8b83f74aaefd382a14ffeb124",
+      "bytes": 7907
     },
     {
       "path": "test/metrics.test.mjs",

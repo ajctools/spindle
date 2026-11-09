@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatMessage,chatSettings,readChatResponse} from '../chat.mjs';
-import {chatDetails} from '../public/chat-ui.mjs';
+import {chatDetails,withResponseLimit} from '../public/chat-ui.mjs';
 import {createMetric} from '../metrics.mjs';
 
 test('chat separates model reasoning and tagged thoughts from the answer',()=>{
@@ -20,6 +20,19 @@ test('thinking controls follow model capabilities and internal options never rea
   assert.equal(chatSettings({_spindleThinking:'auto'}).chat_template_kwargs,undefined);
   const metric=createMetric({job:{id:'test',createdAt:'2026-01-01'},step:{task:'chat',model:'test',params:{_spindleThinking:'on',_spindleWebSearch:{enabled:true,query:'private-query'}}},index:0});
   assert.deepEqual(metric.profile.chat,{thinkingMode:'on',thinkingEnabled:null,reasoningEffort:'auto',stream:null,webSearch:true});assert.ok(!JSON.stringify(metric).includes('private-query'));
+});
+test('response length defaults to no Spindle cap and explicit selections preserve other settings',()=>{
+  const defaults=chatSettings(withResponseLimit({temperature:0.6}));
+  assert.equal(defaults.max_tokens,undefined);assert.equal(defaults.max_completion_tokens,undefined);
+  assert.equal(withResponseLimit({max_tokens:7200}).max_tokens,7200);
+  assert.deepEqual(withResponseLimit({temperature:0.6,max_completion_tokens:4000},'16384'),{temperature:0.6,max_tokens:16384});
+  assert.equal(withResponseLimit({},'custom','24000').max_tokens,24000);
+  assert.equal(chatSettings({max_tokens:null}).max_tokens,undefined);
+  assert.equal(chatSettings({max_completion_tokens:8192}).max_completion_tokens,8192);
+  for(const invalid of [0,-1,2.5,'8192',Infinity])assert.throws(()=>chatSettings({max_tokens:invalid}),/positive whole number/);
+  for(const invalid of ['',0,-1,2.5,'bad'])assert.throws(()=>withResponseLimit({},'custom',invalid),/positive whole number/);
+  assert.throws(()=>withResponseLimit({},'unknown'),/valid/);
+  assert.throws(()=>chatSettings({max_tokens:4000,max_completion_tokens:4000}),/only one/);
 });
 test('stream decoder handles split UTF-8, CRLF boundaries, reasoning, usage and completion',async()=>{
   const events=[{choices:[{delta:{reasoning_content:'A thought 🌟'}}]}, {choices:[{delta:{content:'An answer.'}}]}, {choices:[{delta:{},finish_reason:'length'}]}, {choices:[],usage:{prompt_tokens:5,completion_tokens:9,total_tokens:14},timings:{predicted_per_second:12}}];
@@ -40,5 +53,8 @@ test('chat handles JSON responses and fails visibly on interrupted or invalid st
 });
 test('reasoning and source cards render inert text and safe links',()=>{
   const html=chatDetails({reasoning:'<script>alert(1)</script>',webSearch:{provider:'brave',query:'<img>',searchedAt:'2026-01-01',sources:[{url:'javascript:alert(1)',title:'unsafe'},{url:'https://example.com',title:'<img onerror=bad>',snippet:'<script>bad</script>'}]},finishReason:'length'});
-  assert.ok(html.includes('data-reasoning'));assert.ok(!html.includes('<details class="thinking-panel" open'));assert.ok(!html.includes('javascript:'));assert.ok(!html.includes('<script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('noopener noreferrer'));assert.ok(html.includes('token limit'));
+  assert.ok(html.includes('data-reasoning'));assert.ok(!html.includes('<details class="thinking-panel" open'));assert.ok(!html.includes('javascript:'));assert.ok(!html.includes('<script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('noopener noreferrer'));assert.ok(html.includes('token or context limit'));
+  assert.ok(chatDetails({finishReason:'length',responseLimit:16384}).includes('16,384-token limit'));
+  const uncapped=chatDetails({finishReason:'length',responseLimit:null});assert.ok(uncapped.includes('Spindle did not set a token cap'));assert.ok(uncapped.includes('Maximum response tokens'));
+  const exhausted=chatDetails({finishReason:'length',responseLimit:4096,reasoning:'Thinking only',text:''});assert.ok(exhausted.includes('before an answer arrived'));assert.ok(exhausted.includes('resend your prompt'));assert.ok(!exhausted.includes('ask the model to continue'));
 });
