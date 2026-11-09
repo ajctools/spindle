@@ -1,12 +1,5 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export function withResponseLimit(params,selection='default',custom=''){
-  if(selection==='default')return {...params};
-  if(!['4096','8192','16384','32768','custom'].includes(selection))throw new Error('Choose a valid maximum response length.');
-  const value=Number(selection==='custom'?custom:selection);
-  if(!Number.isSafeInteger(value)||value<1)throw new Error('Enter a positive whole number for maximum response tokens.');
-  const {max_tokens,max_completion_tokens,...rest}=params;
-  return {...rest,max_tokens:value};
-}
+export {withResponseLimit} from './chat-settings.mjs';
 export function chatDetails(out,part='all'){
   const reasoning=out.reasoning?`<details class="thinking-panel" data-chat-panel data-reasoning><summary>✦ Thinking <span>Model-provided reasoning</span></summary><div class="output-text">${esc(out.reasoning)}</div></details>`:'';
   const search=out.webSearch;

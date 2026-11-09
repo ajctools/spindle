@@ -12,3 +12,5 @@
 @media(min-width:1100px){.work-grid>.panel:last-child{position:sticky;top:20px}.work-grid .output-area{max-height:calc(100vh - 110px);overflow:auto}}
 
 #custom-token-field[hidden]{display:none}
+
+.chat-send-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:-5px;margin-bottom:12px}.chat-send-row .primary{padding:12px 24px;font-size:13px}.chat-send-row .small{line-height:1.6}.chat-search-notice{font-size:10px;line-height:1.65;color:var(--muted);margin:10px 0 18px;padding:9px 12px;border-left:2px solid var(--line)}.chat-search-notice.search-enabled{border-color:#eecb91;color:#eecb91}.chat-options{margin-top:18px;padding-top:16px}.chat-options>summary{display:flex;justify-content:space-between;gap:12px;align-items:center;color:var(--text);list-style:none}.chat-options>summary:before{content:'＋';color:var(--accent)}.chat-options[open]>summary:before{content:'−'}.chat-options>summary .small{font-size:10px;max-width:260px;text-align:right}.chat-options-body{padding-top:20px}.chat-options .chat-controls{margin-bottom:18px}@media(max-width:600px){.chat-options>summary .small{max-width:160px}.chat-send-row{gap:10px}.chat-send-row .primary{flex:1}}

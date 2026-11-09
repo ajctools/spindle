@@ -26,7 +26,7 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     if(p.endsWith('/start')||p.endsWith('/stop')){const id=decodeURIComponent(p.split('/').at(-2));const action=p.split('/').at(-1);events.push([action,id]);loaded=action==='start'?[...loaded,id]:loaded.filter(x=>x!==id);return send({ok:true});}
     if(p==='/v1/chat/completions'){
       const b=JSON.parse(raw);assert.equal(b.model,'test/chat');assert.equal(b.stream,true);assert.equal(b.stream_options.include_usage,true);assert.ok(!JSON.stringify(b).includes('_spindle'));events.push(['chat',b.messages.at(-1).content]);
-      assert.equal(b.max_tokens,b.messages.at(-1).content==='Test an explicit response limit'?16384:undefined);
+      assert.equal(b.max_tokens,b.messages.at(-1).content==='Test an explicit response limit'?16384:32768);
       if(b.messages.at(-1).content==='Test a stream failure'){
         res.setHeader('content-type','text/event-stream');res.end('data: '+JSON.stringify({error:{message:'Upstream rejected fixture-key'}})+'\n\n');return;
       }
@@ -56,7 +56,7 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     const created=await post('/api/run',{name:w.name,input:'Explain a handoff.',switchModels:true,steps:w.steps});assert.ok(created.id);
     let job,sawThinking=false;for(let i=0;i<100;i++){job=(await (await get('/api/runs')).json()).find(j=>j.id===created.id);if(job.partial?.reasoning)sawThinking=true;if(['completed','failed'].includes(job.status))break;await pause(70);}
     assert.equal(job.status,'completed',job.error);assert.equal(sawThinking,true);assert.equal(job.outputs[0].reasoning,'A private model thought.');assert.equal(job.outputs[0].text,'A useful handoff.');assert.equal(job.outputs[0].metrics.totalTokens,18);assert.equal(job.partial,undefined);assert.ok(!JSON.stringify(job).includes('fixture-session-search-key'));assert.equal(job.outputs.length,2);assert.equal(job.restoredModels,true);assert.deepEqual(loaded,['test/chat']);
-    assert.equal(job.outputs[0].responseLimit,null);
+    assert.equal(job.outputs[0].responseLimit,32768);
     assert.ok(events.some(e=>e[0]==='speech'&&e[1]==='A useful handoff.'));
     assert.ok(!(await fs.readFile(path.join(testDir,'runs.json'),'utf8')).includes('fixture-session-search-key'));
     assert.deepEqual(await post('/api/search/settings',{key:''}),{braveKeyPresent:false});

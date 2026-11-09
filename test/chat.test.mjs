@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatMessage,chatSettings,readChatResponse} from '../chat.mjs';
 import {chatDetails,withResponseLimit} from '../public/chat-ui.mjs';
+import {loadChatOptions,saveChatOptions,ampleResponseTokens} from '../public/chat-settings.mjs';
 import {createMetric} from '../metrics.mjs';
 
 test('chat separates model reasoning and tagged thoughts from the answer',()=>{
@@ -21,18 +22,31 @@ test('thinking controls follow model capabilities and internal options never rea
   const metric=createMetric({job:{id:'test',createdAt:'2026-01-01'},step:{task:'chat',model:'test',params:{_spindleThinking:'on',_spindleWebSearch:{enabled:true,query:'private-query'}}},index:0});
   assert.deepEqual(metric.profile.chat,{thinkingMode:'on',thinkingEnabled:null,reasoningEffort:'auto',stream:null,webSearch:true});assert.ok(!JSON.stringify(metric).includes('private-query'));
 });
-test('response length defaults to no Spindle cap and explicit selections preserve other settings',()=>{
+test('ample response allowance respects small contexts and explicit runtime defaults remain available',()=>{
   const defaults=chatSettings(withResponseLimit({temperature:0.6}));
-  assert.equal(defaults.max_tokens,undefined);assert.equal(defaults.max_completion_tokens,undefined);
-  assert.equal(withResponseLimit({max_tokens:7200}).max_tokens,7200);
-  assert.deepEqual(withResponseLimit({temperature:0.6,max_completion_tokens:4000},'16384'),{temperature:0.6,max_tokens:16384});
+  assert.equal(defaults.max_tokens,32768);assert.equal(defaults.max_completion_tokens,undefined);
+  assert.equal(withResponseLimit({max_tokens:7200},'default').max_tokens,7200);
+  assert.equal(chatSettings(withResponseLimit({},'default')).max_tokens,undefined);
+  assert.equal(ampleResponseTokens({context:16384}),8192);assert.equal(ampleResponseTokens({context:131072}),32768);assert.equal(ampleResponseTokens({context:'unknown'}),32768);
+  assert.equal(chatSettings({}, {context:8192}).max_tokens,4096);
+  assert.deepEqual(withResponseLimit({temperature:0.6,max_completion_tokens:4000},'16384'),{temperature:0.6,_spindleResponseMode:'explicit',max_tokens:16384});
   assert.equal(withResponseLimit({},'custom','24000').max_tokens,24000);
-  assert.equal(chatSettings({max_tokens:null}).max_tokens,undefined);
+  assert.equal(chatSettings({max_tokens:null}).max_tokens,32768);
   assert.equal(chatSettings({max_completion_tokens:8192}).max_completion_tokens,8192);
   for(const invalid of [0,-1,2.5,'8192',Infinity])assert.throws(()=>chatSettings({max_tokens:invalid}),/positive whole number/);
   for(const invalid of ['',0,-1,2.5,'bad'])assert.throws(()=>withResponseLimit({},'custom',invalid),/positive whole number/);
   assert.throws(()=>withResponseLimit({},'unknown'),/valid/);
   assert.throws(()=>chatSettings({max_tokens:4000,max_completion_tokens:4000}),/only one/);
+});
+test('chat preferences retain web search and response settings without storing secrets or queries',()=>{
+  const values=new Map(),storage={getItem:key=>values.get(key) ?? null,setItem:(key,value)=>values.set(key,value)};
+  const fresh=loadChatOptions(storage);assert.equal(fresh.search,true);assert.equal(fresh.responseLimit,'ample');
+  assert.equal(saveChatOptions(storage,{...fresh,search:false,provider:'brave',responseLimit:'custom',customTokens:'48000',query:'private-query',key:'private-key'}),true);
+  const saved=loadChatOptions(storage);assert.equal(saved.search,false);assert.equal(saved.provider,'brave');assert.equal(saved.customTokens,48000);assert.equal(saved.query,'');
+  assert.ok(![...values.values()].join('').includes('private-query'));assert.ok(![...values.values()].join('').includes('private-key'));
+  saveChatOptions(storage,{...saved,search:true});assert.equal(loadChatOptions(storage).search,true);
+  storage.getItem=()=>'{invalid';assert.equal(loadChatOptions(storage).search,true);
+  const blocked={getItem(){throw new Error('blocked');},setItem(){throw new Error('blocked');}};assert.equal(loadChatOptions(blocked).responseLimit,'ample');assert.equal(saveChatOptions(blocked,fresh),false);
 });
 test('stream decoder handles split UTF-8, CRLF boundaries, reasoning, usage and completion',async()=>{
   const events=[{choices:[{delta:{reasoning_content:'A thought 🌟'}}]}, {choices:[{delta:{content:'An answer.'}}]}, {choices:[{delta:{},finish_reason:'length'}]}, {choices:[],usage:{prompt_tokens:5,completion_tokens:9,total_tokens:14},timings:{predicted_per_second:12}}];

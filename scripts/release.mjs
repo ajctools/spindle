@@ -8,7 +8,7 @@ export const RELEASE_FILES=[
   '.env.example','.gitignore','.gitattributes','README.md','Start-Spindle.ps1','package.json','server.mjs','core.mjs','connection.mjs','metrics.mjs','security.mjs','chat.mjs','web-search.mjs',
   'LICENSE','SECURITY.md','CONTRIBUTING.md','.github/workflows/ci.yml','docs/SECURITY.md','docs/VALIDATION.md','docs/USAGE.md','scripts/release.mjs','scripts/preview-demo.mjs',
   'docs/images/hero.svg','docs/images/how-it-works.svg','docs/images/chat.jpg','docs/images/dashboard.jpg','docs/images/workbench.jpg','docs/images/workflows.jpg','docs/images/connection.jpg',
-  'public/app.js','public/chat-ui.mjs','public/audio.js','public/dashboard.js','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css',
+  'public/app.js','public/chat-ui.mjs','public/chat-settings.mjs','public/audio.js','public/dashboard.js','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css',
   'fixtures/document.png','fixtures/speech.wav','fixtures/star.png',
   'test/adapters.test.mjs','test/chat.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs',
 ];

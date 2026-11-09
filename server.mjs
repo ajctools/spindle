@@ -446,7 +446,7 @@ const server=http.createServer(async(req,res)=>{
     else if(p==='/catalog.csv'){file=path.join(DATA,'catalog.csv');mime='text/csv';}
     else if(/^\/assets\/[a-f0-9-]+\.[a-z0-9]+$/.test(p)){
       file=path.join(DATA,'assets',path.basename(p));mime=({'png':'image/png','jpg':'image/jpeg','wav':'audio/wav','mp3':'audio/mpeg','mp4':'video/mp4','glb':'model/gltf-binary','json':'application/json'})[p.split('.').pop()] || 'application/octet-stream';
-    }else if(['/','/index.html','/app.js','/chat-ui.mjs','/styles.css','/experience.css','/effects.js','/audio.js','/guidance.mjs','/guidance.css','/dashboard.js','/dashboard.css','/favicon.svg'].includes(p)){
+    }else if(['/','/index.html','/app.js','/chat-ui.mjs','/chat-settings.mjs','/styles.css','/experience.css','/effects.js','/audio.js','/guidance.mjs','/guidance.css','/dashboard.js','/dashboard.css','/favicon.svg'].includes(p)){
       file=path.join(ROOT,'public',p==='/'?'index.html':p.slice(1));mime=p.endsWith('.js')||p.endsWith('.mjs')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.svg')?'image/svg+xml':'text/html';
     }else{send(res,{error:'Not found'},404);return;}
     const bytes=await fs.readFile(file);res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',

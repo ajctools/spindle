@@ -1,3 +1,4 @@
+import {ampleResponseTokens} from './public/chat-settings.mjs';
 // Tiiny chat responses may separate reasoning or wrap it in <think> tags.
 const text=value=>typeof value==='string'?value:Array.isArray(value)?value.map(v=>v.text || '').join(''):'';
 export function splitThinking(content='',reasoning=''){
@@ -16,12 +17,14 @@ export function chatMessage(message={}){
   return splitThinking(text(message.content),text(message.reasoning_content)||text(message.reasoning)||text(message.thinking));
 }
 export function chatSettings(params={},model={}){
-  const {_spindleThinking,_spindleEffort,_spindleStream,_spindleWebSearch,...wire}=params;
+  const {_spindleThinking,_spindleEffort,_spindleStream,_spindleWebSearch,_spindleResponseMode,...wire}=params;
+  if(_spindleResponseMode!==undefined&&!['ample','model','explicit'].includes(_spindleResponseMode))throw new Error('Choose a valid response allowance.');
   for(const key of ['max_tokens','max_completion_tokens']){
     if(wire[key]===null)delete wire[key];
     if(wire[key]!==undefined&&(!Number.isSafeInteger(wire[key])||wire[key]<1))throw new Error('The response token limit must be a positive whole number. Choose Model default to leave it to Tiiny.');
   }
   if(wire.max_tokens!==undefined&&wire.max_completion_tokens!==undefined)throw new Error('Use only one response token limit: max_tokens or max_completion_tokens.');
+  if(wire.max_tokens===undefined&&wire.max_completion_tokens===undefined&&_spindleResponseMode!=='model')wire.max_tokens=ampleResponseTokens(model);
   if(_spindleThinking!==undefined&&_spindleThinking!=='auto'){
     if(!['on','off'].includes(_spindleThinking))throw new Error('Choose a valid thinking mode.');
     if(!model.thinking?.toggleable)throw new Error('This model does not report a thinking toggle. Choose Model default.');

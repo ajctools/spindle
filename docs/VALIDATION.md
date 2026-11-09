@@ -11,3 +11,5 @@ Public releases contain no owner-specific device validation logs, installed-mode
 Synthetic image fixtures contain generated graphics and sample document text. The speech fixture is synthesized speech, not a recording of a user.
 
 Chat/search coverage includes split UTF-8 and CRLF stream frames, streamed reasoning, tagged reasoning, JSON responses, final usage, truncated/invalid streams, capability-gated thinking controls, source/HTML escaping, fixed provider destinations, credential separation, failure behavior, response limits, and live reasoning through the workflow bridge. Search providers are mocked in automated tests; live provider availability and every model/firmware combination are not guaranteed.
+
+Compact-chat coverage includes an ample 32,768-token default, conservative adjustment for smaller reported context windows, explicit runtime defaults, persisted response/search/provider preferences, blocked-storage fallback, and exclusion of prompts, queries, and credentials from preference storage. Browser checks verified Send adjacent to the prompt, collapsed options, successful submission while collapsed, and search/response choices surviving reloads.

@@ -4,7 +4,7 @@
 
 **A creative companion for Tiiny AI.** One local workspace for chat, images, audio, video, documents, 3D, model discovery, repeatable workflows, and a dashboard that remembers how your work performed.
 
-**Preview v0.5.1 · MIT license · Node.js 22+ · No Tiiny SDK required**
+**Preview v0.5.2 · MIT license · Node.js 22+ · No Tiiny SDK required**
 
 > [!CAUTION]
 > **READ BEFORE CONNECTING — LOCAL, SINGLE-USER SOFTWARE**
@@ -14,7 +14,7 @@
 > - **Do not expose the helper server to the internet or other users.** There is no multi-user login. Docker packaging is **not implemented**.
 > - **Data stays private only if you handle it privately.** Runs, media, inventories, and exports can contain sensitive information. Never publish `data/`, actual environment files, or CLI configuration.
 >
-> - **Web search is optional and external.** When enabled, the explicit search query (or current prompt) goes to DuckDuckGo or Brave over HTTPS. Search is off by default. Brave requires a separate API key, held only in server memory. Queries and results remain in local run history.
+> - **Web search is optional and external.** When enabled, the explicit search query (or current prompt) goes to DuckDuckGo or Brave over HTTPS. Search is on by default and the on/off choice is remembered in this browser. The external-query notice remains visible beside Send even when Chat options is collapsed. Brave requires a separate API key, held only in server memory. Queries and results remain in local run history.
 >
 > Read [Security & privacy](docs/SECURITY.md). A local audit is not a guarantee that every vulnerability has been found.
 
@@ -68,13 +68,13 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 
 ## Chat with thinking and web sources
 
-**Chat no longer adds a 2,048-token cap by default.** The visible Maximum response tokens control offers model defaults, presets, and a custom limit. Reasoning can share the output budget; device output/context limits still apply.
+**A compact chat composer with ample defaults.** Send is directly beneath the prompt. Chat options stays collapsed until needed, with response length, search, thinking, attachments, examples, and advanced controls inside. The default Ample allowance requests up to 32,768 output tokens, reduced to half a smaller reported context to reserve input room. This is a workload ceiling rather than a spending allowance; reasoning can share it and runtime/context limits still apply.
 
 Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
 
-Enable **Search the web before each message** to supply up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. Full pages are not fetched, citations are model-generated, and source claims need checking. No SDK is required.
+**Search the web before each message** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. Full pages are not fetched, citations are model-generated, and source claims need checking. No SDK is required.
 
-![Thinking controls, source links, and the web-search privacy notice](docs/images/chat.jpg)
+![Compact chat with Send beside remembered web-search status and collapsed options](docs/images/chat.jpg)
 
 *Chat UI validation: synthetic model and answer, with a live public search query. The pictured response is not a device-generated answer.*
 
