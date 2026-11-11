@@ -2,7 +2,7 @@
 
 # Spindle
 
-**A creative companion for Tiiny AI.** One local workspace for chat, images, audio, video, documents, 3D, model discovery, repeatable workflows, and a dashboard that remembers how your work performed.
+Spindle is a browser workbench for your Tiiny. Use it to run downloaded models, pass an image or text from one step to the next, and see how each run used the device.
 
 **Preview v0.5.2 · MIT license · Node.js 22+ · No Tiiny SDK required**
 
@@ -24,10 +24,10 @@
 
 *Illustrative demo. All models, usage, hardware values, and performance numbers in these screenshots are synthetic. They are not Tiiny benchmark results or a list of available models.*
 
-| Make something | Connect the steps |
+| Workbench | Saved workflows |
 | --- | --- |
-| ![Workbench with task selection and contextual guidance](docs/images/workbench.jpg) | ![A sequential image-to-video workflow](docs/images/workflows.jpg) |
-| Choose a task, pick a compatible downloaded model, and try a small input. | Pin model IDs, pass text or files between steps, and save a recipe. |
+| ![Workbench with task selection and contextual guidance](docs/images/workbench.jpg) | ![Workflows for making a film, replacing dialogue, and building a museum](docs/images/workflows.jpg) |
+| Each task has a sample prompt or input file. Try the sample invoice for OCR, a short recording for transcription, or the star image for a 3D shape. | Start with a recipe or build your own. Pin model IDs and pass text or files between steps. |
 
 ## Start in three steps
 
@@ -82,7 +82,7 @@ Image creation needs no extra software. Film processing requires **FFmpeg and FF
 
 The museum exports as **one self-contained HTML file** with textured materials, exhibit lighting, real source images, distinct sculptures, optional narration, keyboard/mouse/touch controls, and a readable collection view. Four suggested briefs guide the build, with **The Chrono Vault** as the signature edition. Public text, static images, and linked README text refresh at build time; no project scripts run. Rebuild later for fresh captures. An optional hero object uses an image reference followed by a downloaded 3D model's shape stage, with compatible GLB geometry displayed locally. Open the result offline without Spindle, Tiiny, external fonts or CDNs. In the default author path, the Tiiny writes all custom HTML/CSS/JavaScript application code and repairs, using a pinned standard Three.js library bundled into the HTML with its MIT notice. Spindle supplies data capture, tests and packaging, and the browser renders the result. The separately labeled template preview uses Spindle’s original gallery engine. Model handoffs are mock-tested; each firmware/model combination still needs physical validation.
 
-Follow the [complete museum guide](docs/MUSEUM.md) to create the signature edition without a cloud AI account or key. The one-click plan can create six murals, a hero object, narration and a soundscape, then ask the Tiiny to build the complete application. The local test-and-repair loop retains native source responses, exact edits, screenshots and source hashes; a failed generated app is never silently replaced by the supplied template.
+[The Chrono Vault build guide](docs/MUSEUM.md) walks through a six-exhibit museum, from capturing public projects to testing the Tiiny-written app. The full recipe can also create wall art, a 3D object, narration, and a soundscape. A failed build retains its source and completed work so you can resume.
 
 The generated museum also offers two Tiiny-made surface textures, using supplied stone and timber prompts. The Tiiny implements the generated app’s scene, lighting and materials using the standard rendering library. The separate template viewer supplies surface relief, metallic highlights, cached shadows, and restrained floor reflections. Materials remain embedded offline. Quick builds use procedural textures, and Auto/High/Battery graphics settings adapt the rendering workload.
 
@@ -102,7 +102,17 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 
 Track reported input/output tokens, runtime decode and prefill t/s, median and p95 execution time, media counts, video generation rate, audio generation rate, and live device load. Filter by period, model, capability, or fixed text-benchmark samples. History persists locally, with CSV and JSON exports.
 
-An optional cloud-price comparison applies dated, editable rates from Anthropic, Google and an example OpenRouter model route to completed text-only chat steps with both token counts. It follows the dashboard filters and shows coverage, source links and assumptions. It is an illustration of potential API spend avoided, not a claim of equivalent model quality or net savings. No usage is sent to a provider.
+The dashboard applies editable cloud rates to completed text-only chat steps with both token counts. For example, 1 million input and 250,000 output tokens would cost approximately:
+
+| Example API model | Estimated cost |
+| --- | ---: |
+| Anthropic Claude Sonnet 5.5 | $4.50 |
+| Google Gemini 3.5 Flash-Lite | $0.93 |
+| OpenRouter Qwen3.5-27B (Alibaba Cloud route) | $0.59 |
+
+These [published rates and assumptions](docs/USAGE.md#cloud-price-comparison) illustrate API charges for the same token counts before fees. The comparison does not measure equivalent output quality or net savings after hardware and electricity. Spindle does the calculation locally, using the current dashboard filters.
+
+![Cloud price estimates for three models using synthetic text counts](docs/images/cloud-cost.jpg)
 
 Live NPU/CPU/RAM rings and traces remain visible across workspaces. Active runs show a phase indicator, an animated globe and a light sweep, with Still mode and reduced-motion support. Chat has a compact composer and new answers open at their beginning. Workflows are grouped into expandable sections. Compatible saved GLB objects can be inspected inline with orbit, zoom, reset and an expanded viewer; original downloads remain available.
 
