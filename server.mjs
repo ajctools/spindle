@@ -367,7 +367,9 @@ async function startQueue(){
         if(!a)throw new Error('Step '+(i+1)+' needs a compatible file from the previous step.');
         const bytes=await fs.readFile(path.join(DATA,'assets',path.basename(a.url)));file={name:path.basename(a.url),data:'data:'+a.mime+';base64,'+bytes.toString('base64')};
       }
-      const step={...s,file,prompt:expandPrompt(prompt,job.input,previous),usesWorkflowData:!prompt||/\{\{(?:input|previous\.text)\}\}/.test(prompt),...(job.museum?.retainedShape&&s.task==='mesh'&&job.museum.retainedShape.model===s.model?{retainedNative:job.museum.retainedShape}:{})};
+      // Chat composer text is already the current message. Only workflow templates expand handoffs.
+      const literalChat=s.task==='chat'&&s.promptMode==='literal';
+      const step={...s,file,prompt:literalChat?prompt:expandPrompt(prompt,job.input,previous),usesWorkflowData:!literalChat&&(!prompt||/\{\{(?:input|previous\.text)\}\}/.test(prompt)),...(job.museum?.retainedShape&&s.task==='mesh'&&job.museum.retainedShape.model===s.model?{retainedNative:job.museum.retainedShape}:{})};
       const prepStarted=performance.now();
       if(job.switchModels){job.phase='Preparing '+(cached.models.find(m=>m.id===s.model)?.name || s.model);await saveJobs();await rememberLoadedModels(job);await switchTo(s.model);}
       if(s.task==='music')step.musicRuntime=await musicInfoReady(s.model,controller.signal,job);

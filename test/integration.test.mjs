@@ -4,8 +4,11 @@ import http from 'node:http';
 import {spawn} from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
+
+const chatPrompt='Look up the meaning of {{previous.text}}';
+const priorTurn='Private text from an earlier chat turn';
 
 test('local bridge inventories, protects writes, hands workflow outputs across models, and restores residency',async()=>{
   const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -26,6 +29,10 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     if(p.endsWith('/start')||p.endsWith('/stop')){const id=decodeURIComponent(p.split('/').at(-2));const action=p.split('/').at(-1);events.push([action,id]);loaded=action==='start'?[...loaded,id]:loaded.filter(x=>x!==id);return send({ok:true});}
     if(p==='/v1/chat/completions'){
       const b=JSON.parse(raw);assert.equal(b.model,'test/chat');assert.equal(b.stream,true);assert.equal(b.stream_options.include_usage,true);assert.ok(!JSON.stringify(b).includes('_spindle'));events.push(['chat',b.messages.at(-1).content]);
+      if(b.messages.at(-1).content===chatPrompt){
+        assert.equal(b.messages[0].role,'system');assert.match(b.messages[0].content,/Fixture search result/);
+        assert.equal(b.messages[1].content,priorTurn);
+      }
       assert.equal(b.max_tokens,b.messages.at(-1).content==='Test an explicit response limit'?16384:32768);
       if(b.messages.at(-1).content==='Test a stream failure'){
         res.setHeader('content-type','text/event-stream');res.end('data: '+JSON.stringify({error:{message:'Upstream rejected fixture-key'}})+'\n\n');return;
@@ -37,7 +44,21 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     res.statusCode=404;send({error:{message:'Unknown fixture route '+p}});
   });
   await new Promise(r=>device.listen(0,'127.0.0.1',r));
-  const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,SPINDLE_PORT:String(port),SPINDLE_DATA_DIR:testDir,TIINY_HOST:'http://127.0.0.1:'+device.address().port,TIINY_KEY:'fixture-key'},stdio:['ignore','pipe','pipe']});
+  const searchFixture=path.join(testDir,'search-fixture.mjs');
+  await fs.writeFile(searchFixture,`
+    import assert from 'node:assert/strict';
+    const fetchDevice=globalThis.fetch;
+    globalThis.fetch=async (input,options)=>{
+      const url=new URL(input);
+      if(url.hostname==='127.0.0.1')return fetchDevice(input,options);
+      assert.equal(url.origin,'https://html.duckduckgo.com');
+      assert.equal(url.searchParams.get('q'),${JSON.stringify(chatPrompt)});
+      assert.equal(options.headers.Authorization,undefined);
+      assert.equal(options.headers['X-Subscription-Token'],undefined);
+      return new Response('<a class="result__a" href="https://example.com">Fixture search result</a>');
+    };
+  `);
+  const proc=spawn(process.execPath,['--import',pathToFileURL(searchFixture).href,'server.mjs'],{cwd:root,env:{...process.env,SPINDLE_PORT:String(port),SPINDLE_DATA_DIR:testDir,TIINY_HOST:'http://127.0.0.1:'+device.address().port,TIINY_KEY:'fixture-key'},stdio:['ignore','pipe','pipe']});
   let log='';proc.stdout.on('data',b=>log+=b);proc.stderr.on('data',b=>log+=b);
   const base='http://127.0.0.1:'+port;
   try{
@@ -69,6 +90,16 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     const limited=await post('/api/run',{input:'Test an explicit response limit',steps:[{task:'chat',model:'test/chat',prompt:'{{input}}',params:{max_tokens:16384}}]});
     let limitedJob;for(let i=0;i<60;i++){limitedJob=(await (await get('/api/runs')).json()).find(j=>j.id===limited.id);if(['completed','failed'].includes(limitedJob.status))break;await pause(50);}
     assert.equal(limitedJob.status,'completed',limitedJob.error);assert.equal(limitedJob.outputs[0].responseLimit,16384);assert.equal(limitedJob.outputs[0].finishReason,'length');
+    const searchStep={task:'chat',model:'test/chat',params:{_spindleWebSearch:{enabled:true,provider:'duckduckgo',query:''}}};
+    const finish=async({id})=>{let run;for(let i=0;i<80;i++){run=(await (await get('/api/runs')).json()).find(j=>j.id===id);if(['completed','failed'].includes(run?.status))return run;await pause(50);}assert.fail('Chat did not reach a terminal state: '+run?.status);};
+    const chat=await finish(await post('/api/run',{steps:[{...searchStep,prompt:chatPrompt,promptMode:'literal',messages:[{role:'user',content:priorTurn}]}]}));
+    assert.equal(chat.status,'completed',chat.error);
+    assert.equal(chat.outputs[0].text,'A useful handoff.');
+    assert.equal(chat.outputs[0].webSearch.query,chatPrompt);
+    const handoff=await finish(await post('/api/run',{input:'Private workflow input',steps:[{...searchStep,prompt:'Summarize {{input}}'}]}));
+    assert.equal(handoff.status,'failed');
+    assert.match(handoff.error,/explicit web search query/);
+    assert.equal(handoff.outputs.length,0);
   }finally{
     proc.kill();await new Promise(r=>proc.once('exit',r));await new Promise(r=>device.close(r));
     // This directory was created directly under the test directory by mkdtemp.
