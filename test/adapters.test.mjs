@@ -28,7 +28,7 @@ test('all multimodal adapters preserve their request and output contracts',async
     if(p==='/v1/image/generate'){seen.add('edit');assert.match(JSON.parse(raw).image,/^data:image/);res.setHeader('X-Token-Usage',JSON.stringify({input_tokens:5,output_tokens:45,total_tokens:50}));return binary(png,'image/png');}
     if(p==='/v1/audio/transcriptions'){seen.add('asr');assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.'});}
     if(p==='/v1/audio/speech'){seen.add('speech');return json({success:true,audio_data:wav.toString('base64')});}
-    if(p==='/v1/music/generate/wav'){seen.add('music');const b=JSON.parse(raw);assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyrics,'[instrumental]');return binary(wav,'audio/wav');}
+    if(p==='/v1/music/generate/wav'){seen.add('music');const b=JSON.parse(raw);assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyric_text,'[instrumental]');return binary(wav,'audio/wav');}
     if(p==='/v1/ocr'){seen.add('ocr');assert.equal(url.searchParams.get('model'),'fixture/ocr');assert.equal(JSON.parse(raw).model,undefined);return json({data:[{text:'Invoice 1042'}]});}
     if(p==='/v1/embeddings'){seen.add('embed');return json({data:[{embedding:[.1,.2,.3]}]});}
     if(p==='/v1/rerank'){seen.add('rerank');assert.equal(JSON.parse(raw).documents.length,2);return json({results:[{index:0,relevance_score:.99}]});}

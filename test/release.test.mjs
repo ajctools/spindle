@@ -10,7 +10,10 @@ test('release scanning catches private values, non-example addresses and hidden 
   assert.ok(scanReleaseFile('example.txt',Buffer.from(known[0].value),known).includes('fixture private value'));
   assert.ok(scanReleaseFile('example.txt',Buffer.from(Buffer.from(known[0].value).toString('base64')),known).length);
   assert.ok(scanReleaseFile('example.txt',Buffer.from(['10','20','30','40'].join('.'))).includes('non-documentation IP address'));
-  assert.equal(scanReleaseFile('example.txt',Buffer.from('http://192.0.2.10 http://127.0.0.1')).length,0);
+  for(const address of [['fd00','','2'].join(':'),['fe80','','1234'].join(':')]){
+    assert.ok(scanReleaseFile('example.txt',Buffer.from('http://['+address+']')).includes('non-documentation IP address'));
+  }
+  assert.equal(scanReleaseFile('example.txt',Buffer.from('http://192.0.2.10 http://127.0.0.1 http://[::1] http://[2001:db8::1]')).length,0);
   const png=Buffer.alloc(24);png.writeUInt32BE(4,8);png.write('tEXt',12);assert.ok(scanReleaseFile('example.png',png).includes('image metadata requiring manual review'));
   const binary=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.from(['sample','outside.invalid'].join('@'))]);
   assert.equal(scanReleaseFile('example.png',binary).length,0);assert.ok(scanReleaseFile('example.png',binary,[{label:'known secret',value:'sample'}]).includes('known secret'));

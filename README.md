@@ -38,7 +38,7 @@
    node server.mjs
    ```
 
-3. **Open <http://127.0.0.1:8437>.** Enter your Tiiny endpoint and key, test the connection, and connect. After setup, Dashboard is the default view.
+3. **Open <http://127.0.0.1:8437>.** Enter your Tiiny endpoint and key, test the connection, and connect. After setup, Spindle opens directly into Chat & create. On phones, use the menu for Dashboard and the other tools.
 
 There is no `npm install` step. The Windows launcher `Start-Spindle.ps1` uses an installed Node runtime. A browser tab by itself, a single HTML file, or GitHub Pages cannot run the local helper.
 
@@ -66,6 +66,26 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 > [!WARNING]
 > **Model listings are device-reported metadata, not a compatibility guarantee.** Firmware and runtimes change. Test small inputs first. Model switching unloads models and can affect other clients; restoration can fail after a disconnect or shutdown.
 
+## A built-in image-to-film workflow
+
+Open **Workflows → Idea → image → film**. Start with a phrase and the Qwen Image 2.1 T2I prompt enhancer, or supply an image and an edit instruction for its I2I enhancer. Qwen Image 2.1 creates the result. Review it, keep editing, or animate that exact saved image with the device's MiniMax H3 model. The model selectors use your discovered catalog; download the required models before running.
+
+Choose a final video length from **1–60 seconds**. Spindle aims for clips of up to five seconds using reported native frame counts or the video API's duration interface, extracts each processed clip's final frame for the next clip, and stitches the saved segments locally. Requests above 30 seconds require acknowledging a prominent long-run/failure warning. Completed segments survive failures and restarts; **Resume film** reuses them. Last-frame chaining can still drift in appearance, motion, or audio at joins.
+
+Image creation needs no extra software. Film processing requires **FFmpeg and FFprobe on the helper computer's PATH**, including an H.264 encoder (`libx264`) and AAC support. Nothing is downloaded automatically. This workflow keeps web search off; reference images used for films and generated outputs are retained locally. End-to-end generation on physical Tiiny hardware remains pending validation.
+
+## Repair a soundtrack, build a museum
+
+**Video → repair soundtrack** transcribes a saved video for reference, lets you write the intended spoken words, generates a replacement with a downloaded speech model, and remixes a separate copy locally. Add WAV/MP3 music, duck it under the voice, or retain a little original audio. Original speech and ambience share a track: this release does not separate them or perform lip synchronization. FFmpeg/FFprobe are required. The original video and generated voice remain available.
+
+**TiinyVerse → a walkable 3D museum** imports up to 40 public posts from the [UseCase topic](https://www.tiinyverse.com/topics/usecase), ranked by reported likes. Review up to 24 exhibits; a local chat model can curate them, image models can create wall art, and speech models can narrate the collection. Chronology follows when posts were shared, with author credit, source links, and a dated popularity snapshot. A quick build uses public text, source images, and procedural sculptures without model generation.
+
+The museum exports as **one self-contained HTML file** with textured materials, exhibit lighting, real source images, distinct sculptures, optional narration, keyboard/mouse/touch controls, and a readable collection view. Four suggested briefs guide the build, with **The Chrono Vault** as the signature edition. Public text, static images, and linked README text refresh at build time; no project scripts run. Rebuild later for fresh captures. An optional hero object uses an image reference followed by a downloaded 3D model's shape stage, with compatible GLB geometry displayed locally. Open the result offline without Spindle, Tiiny, external fonts or CDNs. In the default author path, the Tiiny writes all custom HTML/CSS/JavaScript application code and repairs, using a pinned standard Three.js library bundled into the HTML with its MIT notice. Spindle supplies data capture, tests and packaging, and the browser renders the result. The separately labeled template preview uses Spindle’s original gallery engine. Model handoffs are mock-tested; each firmware/model combination still needs physical validation.
+
+Follow the [complete museum guide](docs/MUSEUM.md) to create the signature edition without a cloud AI account or key. The one-click plan can create six murals, a hero object, narration and a soundscape, then ask the Tiiny to build the complete application. The local test-and-repair loop retains native source responses, exact edits, screenshots and source hashes; a failed generated app is never silently replaced by the supplied template.
+
+The generated museum also offers two Tiiny-made surface textures, using supplied stone and timber prompts. The Tiiny implements the generated app’s scene, lighting and materials using the standard rendering library. The separate template viewer supplies surface relief, metallic highlights, cached shadows, and restrained floor reflections. Materials remain embedded offline. Quick builds use procedural textures, and Auto/High/Battery graphics settings adapt the rendering workload.
+
 ## Chat with thinking and web sources
 
 **A compact chat composer with ample defaults.** Send is directly beneath the prompt. Chat options stays collapsed until needed, with response length, search, thinking, attachments, examples, and advanced controls inside. The default Ample allowance requests up to 32,768 output tokens, reduced to half a smaller reported context to reserve input room. This is a workload ceiling rather than a spending allowance; reasoning can share it and runtime/context limits still apply.
@@ -81,6 +101,10 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 ## A dashboard with context
 
 Track reported input/output tokens, runtime decode and prefill t/s, median and p95 execution time, media counts, video generation rate, audio generation rate, and live device load. Filter by period, model, capability, or fixed text-benchmark samples. History persists locally, with CSV and JSON exports.
+
+An optional cloud-price comparison applies dated, editable rates from Anthropic, Google and an example OpenRouter model route to completed text-only chat steps with both token counts. It follows the dashboard filters and shows coverage, source links and assumptions. It is an illustration of potential API spend avoided, not a claim of equivalent model quality or net savings. No usage is sent to a provider.
+
+Live NPU/CPU/RAM rings and traces remain visible across workspaces. Active runs show a phase indicator, an animated globe and a light sweep, with Still mode and reduced-motion support. Chat has a compact composer and new answers open at their beginning. Workflows are grouped into expandable sections. Compatible saved GLB objects can be inspected inline with orbit, zoom, reset and an expanded viewer; original downloads remain available.
 
 > [!IMPORTANT]
 > **Missing usage is not zero.** Some media runtimes omit token totals. Spindle retains counts when supplied and marks missing measurements. It does not estimate media tokens from frames or pixels. Tiiny’s device-wide ledger is separate from Spindle’s observations and is never added to them. Synthetic screenshots are not performance promises.

@@ -52,6 +52,8 @@ test('HTTP privacy boundaries reject unauthenticated reads, rebinding, cross-ori
     const local=await fetch(base+'/api/connection',{headers:{cookie}});assert.equal(local.status,200);assert.equal(local.headers.get('cross-origin-resource-policy'),'same-origin');assert.match(local.headers.get('content-security-policy'),/base-uri 'none'/);
     for(const route of ['/data/connection.json','/.env','/server.mjs','/.git/config'])assert.equal((await fetch(base+route,{headers:{cookie}})).status,404);
     const missing=await(await fetch(base+'/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png',{headers:{cookie}})).text();assert.ok(!missing.includes(data));assert.ok(missing.includes('[local path]'));
+    const malformed=await fetch(base+'/api/connection/test',{method:'POST',headers:{cookie,'Content-Type':'application/json'},body:'{"key":"fixture-malformed-body-key"'});
+    assert.equal(malformed.status,400);assert.deepEqual(await malformed.json(),{error:'The request body is not valid JSON.'});
     const redirected=await fetch(base+'/api/connection/test',{method:'POST',headers:{cookie,'Content-Type':'application/json'},body:JSON.stringify({endpoint:'http://127.0.0.1:'+device.address().port,key:'redirect-fixture-key',hostRouting:false})});
     assert.equal(redirected.status,400);assert.equal(stolen,0);assert.ok(!(await redirected.text()).includes('redirect-fixture-key'));
   }finally{proc.kill();await new Promise(r=>proc.once('exit',r));await Promise.all([new Promise(r=>device.close(r)),new Promise(r=>sink.close(r))]);assert.ok(data.startsWith(path.join(root,'test')+path.sep));await fs.rm(data,{recursive:true,force:true});}

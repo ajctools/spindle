@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {duckResults,searchWeb,searchContext,publicSearchURL} from '../web-search.mjs';
+import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery} from '../web-search.mjs';
+
+test('search does not turn workflow handoffs or credentials into provider queries',()=>{
+  const key='fixture-device/key',options={prompt:'Private text from a previous step',usesWorkflowData:true,secrets:[key]};
+  assert.throws(()=>searchQuery(options),/explicit web search query/);
+  assert.equal(searchQuery({...options,query:'  public query  '}),'public query');
+  assert.equal(searchQuery({prompt:'A current standalone prompt'}),'A current standalone prompt');
+  for(const value of [key,encodeURIComponent(key),Buffer.from(key).toString('base64')])assert.throws(()=>searchQuery({...options,query:value}),/Remove the API key/);
+});
 
 test('keyless search extracts safe snippets and unwraps DuckDuckGo redirects',()=>{
   const result=duckResults('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2F">Example &amp; title</a><a class="result__snippet">A <b>useful</b> snippet.</a><a class="result__a" href="javascript:alert(1)">Bad</a><a class="result__a" href="https://example.com/">Duplicate</a>');

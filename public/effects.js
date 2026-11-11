@@ -1,10 +1,11 @@
 const canvas=document.getElementById('spindle-field'),ctx=canvas.getContext('2d');
 const reduce=matchMedia('(prefers-reduced-motion: reduce)');
-let enabled=localStorage.getItem('spindle-motion')!=='off'&&!reduce.matches,w=0,h=0,time=0,last=0,raf=0,activity=false,px=0,py=0;
+let rememberedMotion='on';try{rememberedMotion=localStorage.getItem('spindle-motion')||'on';}catch{}
+let enabled=rememberedMotion!=='off'&&!reduce.matches,w=0,h=0,time=0,last=0,raf=0,activity=false,px=0,py=0;
 function resize(){const d=Math.min(devicePixelRatio || 1,1.5);w=innerWidth;h=innerHeight;canvas.width=w*d;canvas.height=h*d;canvas.style.width=w+'px';canvas.style.height=h+'px';ctx.setTransform(d,0,0,d,0,0);if(!enabled)draw(0);}
 function project(x,y,z,t){const ry=t*.09+px*.1,rx=-.38+py*.1;const a=x*Math.cos(ry)+z*Math.sin(ry),b=-x*Math.sin(ry)+z*Math.cos(ry),c=y*Math.cos(rx)-b*Math.sin(rx),d=y*Math.sin(rx)+b*Math.cos(rx);return [a,c,d];}
 function draw(t){
-  ctx.clearRect(0,0,w,h);const cx=w<700?w*.82:w*.79,cy=w<700?170:235,r=Math.min(w*.24,250),pulse=activity?1.06:1;
+  ctx.clearRect(0,0,w,h);const cx=w<700?w*.82:w*.79,cy=w<700?170:235,r=Math.min(w*.24,250),pulse=activity?1.045+Math.sin(t*1.8)*.025:1;
   const halo=ctx.createRadialGradient(cx,cy,0,cx,cy,r*1.5);halo.addColorStop(0,'rgba(130,93,255,.13)');halo.addColorStop(.55,'rgba(64,197,210,.055)');halo.addColorStop(1,'rgba(60,40,130,0)');ctx.fillStyle=halo;ctx.fillRect(0,0,w,h);
   ctx.globalCompositeOperation='lighter';
   // Sixty curved threads form a rotating, breathing field rather than a flat particle wallpaper.
@@ -22,10 +23,11 @@ function draw(t){
   for(let n=0;n<46;n++){const x=((n*271.71)%w),y=((n*131.17)%h),a=.08+.13*(.5+.5*Math.sin(t*.4+n));ctx.fillStyle=`rgba(204,207,255,${a})`;ctx.fillRect(x,y,n%8===0?2:1,n%8===0?2:1);}
   ctx.globalCompositeOperation='source-over';
 }
-function frame(now){if(!enabled||document.hidden){raf=0;return;}if(now-last>33){time+=Math.min((now-last)/1000,.1);last=now;draw(time);}raf=requestAnimationFrame(frame);}
+function frame(now){if(!enabled||document.hidden||(document.body.classList.contains('creating')&&!activity)){raf=0;return;}if(now-last>33){time+=Math.min((now-last)/1000,.1);last=now;draw(time);}raf=requestAnimationFrame(frame);}
 function update(){document.body.classList.toggle('still',!enabled);const b=document.getElementById('motion-toggle');b.textContent=enabled?'✧ Ambient motion':'✧ Still mode';b.setAttribute('aria-pressed',String(enabled));if(enabled&&!raf){last=performance.now();raf=requestAnimationFrame(frame);}if(!enabled)draw(time);}
-document.getElementById('motion-toggle').onclick=()=>{enabled=!enabled;localStorage.setItem('spindle-motion',enabled?'on':'off');update();};
+document.getElementById('motion-toggle').onclick=()=>{enabled=!enabled;try{localStorage.setItem('spindle-motion',enabled?'on':'off');}catch{}update();};
 document.addEventListener('pointermove',e=>{px=e.clientX/innerWidth-.5;py=e.clientY/innerHeight-.5;},{passive:true});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});
-window.addEventListener('resize',resize);window.addEventListener('spindle:activity',e=>{activity=!!e.detail;document.body.classList.toggle('is-working',activity);});reduce.addEventListener('change',e=>{if(e.matches){enabled=false;update();}});
+window.addEventListener('spindle:workspace',update);
+window.addEventListener('resize',resize);window.addEventListener('spindle:activity',e=>{activity=!!e.detail;document.body.classList.toggle('is-working',activity);update();});reduce.addEventListener('change',e=>{if(e.matches){enabled=false;update();}});
 resize();update();

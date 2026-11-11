@@ -1,4 +1,11 @@
 // Fixed HTTPS search services only. Never fetch result URLs or send device credentials.
+export function searchQuery({query,prompt,usesWorkflowData=false,secrets=[]}){
+  const explicit=typeof query==='string'?query.trim():'';
+  if(!explicit&&usesWorkflowData)throw new Error('Enter an explicit web search query or turn search off for this step. Workflow handoffs stay local.');
+  const text=explicit || String(prompt || '').trim();
+  if(secrets.some(secret=>secret&&[secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')].some(value=>text.includes(value))))throw new Error('Remove the API key from the web search query before sending.');
+  return text;
+}
 const decode=value=>String(value || '').replace(/&#(x[\da-f]+|\d+);/gi,(_,v)=>{const n=v[0].toLowerCase()==='x'?parseInt(v.slice(1),16):Number(v);return n>0&&n<=0x10ffff?String.fromCodePoint(n):'';}).replace(/&(amp|quot|apos|lt|gt|nbsp);/g,(_,v)=>({amp:'&',quot:'"',apos:"'",lt:'<',gt:'>',nbsp:' '}[v]));
 const plain=value=>decode(String(value || '').replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim();
 export function publicSearchURL(value){

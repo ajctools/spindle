@@ -2,3 +2,5 @@
 *.png binary
 *.jpg binary
 *.wav binary
+# Preserve the pinned bundle, including whitespace in upstream shader strings.
+public/vendor/three-r187.min.js -whitespace linguist-vendored

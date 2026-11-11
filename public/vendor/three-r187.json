@@ -1,0 +1,114 @@
+{
+  "name": "three.js",
+  "version": "0.187.0",
+  "revision": "187",
+  "license": "MIT",
+  "source": "https://github.com/mrdoob/three.js/tree/r187",
+  "sha256": "ef002893ffb12805538163d1ac5fa1c45b561a51ebc3f133d047453ae06a2ff5",
+  "bytes": 770655,
+  "build": "esbuild spindle-runtime-entry.mjs --bundle --format=iife --global-name=THREE --alias:three=./three.module.js --minify --legal-comments=inline --target=es2020 --outfile=three-r187.min.js",
+  "tag": "r187",
+  "buildTool": "esbuild 0.28.2",
+  "buildToolIntegrity": "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==",
+  "records": [
+    {
+      "name": "build/three.module.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/build/three.module.js",
+      "sha256": "104f56145899722094556490d787aae0617cc2fc3382f31df02d724ea1aee341",
+      "bytes": 658900
+    },
+    {
+      "name": "build/three.core.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/build/three.core.js",
+      "sha256": "613e370f76638fdef83926642bf256dc9615684922de1ce1f63a8583e5d78578",
+      "bytes": 1474799
+    },
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/LICENSE",
+      "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+      "bytes": 1081
+    },
+    {
+      "name": "package.json",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/package.json",
+      "sha256": "87f2c99a8718e5fdd6f5e51427fde52c6075f2f698ddf8f7b4e162882df93940",
+      "bytes": 3818
+    },
+    {
+      "name": "examples/jsm/environments/RoomEnvironment.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/environments/RoomEnvironment.js",
+      "sha256": "55f466192cc84298755a424c5e040345006b2ee1455589b3b54126c2ea4123f4",
+      "bytes": 4960
+    },
+    {
+      "name": "examples/jsm/postprocessing/EffectComposer.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/EffectComposer.js",
+      "sha256": "4e079a5886152d7e529a59aef644e968ab4d32c6a33ce016b36bf29b2eac26f7",
+      "bytes": 8501
+    },
+    {
+      "name": "examples/jsm/postprocessing/MaskPass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/MaskPass.js",
+      "sha256": "7cd08eee9d5d6f5578beaddbdcbe9c384f6873810af27f22ab7db3ceeb127aa3",
+      "bytes": 4694
+    },
+    {
+      "name": "examples/jsm/postprocessing/OutputPass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/OutputPass.js",
+      "sha256": "02e4a261af34de71338185e9e87f0cbe5cba9115608d984363e1269dec1d2272",
+      "bytes": 4184
+    },
+    {
+      "name": "examples/jsm/postprocessing/Pass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/Pass.js",
+      "sha256": "444b409c235ead986893c472e720da1b779a56985c7d10b279c7944b52bd61c5",
+      "bytes": 4218
+    },
+    {
+      "name": "examples/jsm/postprocessing/RenderPass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/RenderPass.js",
+      "sha256": "817f6c3cdcd0fd41515d112359ea0532568eefb5aabd3b33903957ebca1b8a6a",
+      "bytes": 4280
+    },
+    {
+      "name": "examples/jsm/postprocessing/ShaderPass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/ShaderPass.js",
+      "sha256": "e2500a5913b26bbf5148ceaae644c6edcff06a18b01494ee37bf856353d2ab9d",
+      "bytes": 3228
+    },
+    {
+      "name": "examples/jsm/postprocessing/UnrealBloomPass.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/postprocessing/UnrealBloomPass.js",
+      "sha256": "ba8f2fcadfa6588384c9473498f974d81d120f02f0e63a0e59c265202a006b5a",
+      "bytes": 15397
+    },
+    {
+      "name": "examples/jsm/shaders/CopyShader.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/shaders/CopyShader.js",
+      "sha256": "a33057d5ac91c43304c186ac0e8816e62bb2ed471d3a00ff3018dfd5c0389718",
+      "bytes": 729
+    },
+    {
+      "name": "examples/jsm/shaders/LuminosityHighPassShader.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/shaders/LuminosityHighPassShader.js",
+      "sha256": "5044f780b6e6cf863947f64c36fe1587132f7fbe395ada863cd1e5f0388dcf1e",
+      "bytes": 1291
+    },
+    {
+      "name": "examples/jsm/shaders/OutputShader.js",
+      "url": "https://raw.githubusercontent.com/mrdoob/three.js/r187/examples/jsm/shaders/OutputShader.js",
+      "sha256": "353479f77a8d7e2629d49ccac9fc2f5dbfdda5442e0adf867b00377a2fcb0cb2",
+      "bytes": 1876
+    }
+  ],
+  "standardHelpers": [
+    "RoomEnvironment",
+    "EffectComposer",
+    "RenderPass",
+    "UnrealBloomPass",
+    "OutputPass"
+  ],
+  "entrySource": "export * from './three.module.js';\nexport { RoomEnvironment } from './modules/examples/jsm/environments/RoomEnvironment.js';\nexport { EffectComposer } from './modules/examples/jsm/postprocessing/EffectComposer.js';\nexport { RenderPass } from './modules/examples/jsm/postprocessing/RenderPass.js';\nexport { UnrealBloomPass } from './modules/examples/jsm/postprocessing/UnrealBloomPass.js';\nexport { OutputPass } from './modules/examples/jsm/postprocessing/OutputPass.js';\n",
+  "buildToolBinarySha256": "c7bee37877d0aa6a046e52783fa0a2cf1a9ce5579d68bb3083bda99d4bff18ef"
+}

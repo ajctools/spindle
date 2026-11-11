@@ -1,16 +1,17 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {isIP} from 'node:net';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 
 export const RELEASE_FILES=[
-  '.env.example','.gitignore','.gitattributes','README.md','Start-Spindle.ps1','package.json','server.mjs','core.mjs','connection.mjs','metrics.mjs','security.mjs','chat.mjs','web-search.mjs',
-  'LICENSE','SECURITY.md','CONTRIBUTING.md','.github/workflows/ci.yml','docs/SECURITY.md','docs/VALIDATION.md','docs/USAGE.md','scripts/release.mjs','scripts/preview-demo.mjs',
+  '.env.example','.gitignore','.gitattributes','README.md','Start-Spindle.ps1','package.json','server.mjs','core.mjs','connection.mjs','metrics.mjs','security.mjs','chat.mjs','web-search.mjs','creative.mjs','film.mjs','museum.mjs','museum-source.mjs','museum-shape.mjs','museum-media.mjs','museum-author.mjs','museum-runtime.mjs','museum-app-data.mjs','museum-app-check.mjs','museum-author-run.mjs','model-idle.mjs','music.mjs','soundtrack.mjs',
+  'LICENSE','SECURITY.md','CONTRIBUTING.md','.github/workflows/ci.yml','docs/SECURITY.md','docs/VALIDATION.md','docs/USAGE.md','docs/MUSEUM.md','scripts/release.mjs','scripts/preview-demo.mjs',
   'docs/images/hero.svg','docs/images/how-it-works.svg','docs/images/chat.jpg','docs/images/dashboard.jpg','docs/images/workbench.jpg','docs/images/workflows.jpg','docs/images/connection.jpg',
-  'public/app.js','public/chat-ui.mjs','public/chat-settings.mjs','public/audio.js','public/dashboard.js','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css',
+  'public/vendor/three-r187.min.js','public/vendor/three-r187.json','public/vendor/THREE-LICENSE.txt','public/app.js','public/chat-ui.mjs','public/chat-settings.mjs','public/audio.js','public/dashboard.js','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css','public/studio.mjs','public/studio.css','public/workshops.mjs','public/museum-viewer.html','public/museum-engine.js','public/museum-renderer.js','public/museum-geometry.mjs','public/museum-recipes.mjs','public/cloud-cost.mjs','public/cost-panel.mjs','public/activity.mjs','public/mesh-preview.mjs','public/refinements.css',
   'fixtures/document.png','fixtures/speech.wav','fixtures/star.png',
-  'test/adapters.test.mjs','test/chat.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs',
+  'test/adapters.test.mjs','test/chat.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs','test/creative.test.mjs','test/workshops.test.mjs','test/museum.test.mjs','test/museum-media.test.mjs','test/museum-recovery.test.mjs','test/music.test.mjs','test/cloud-cost.test.mjs','test/preview.test.mjs','test/museum-author.test.mjs','test/author-route.test.mjs',
 ];
 const patterns=[
   ['private key',/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
@@ -33,17 +34,34 @@ export function scanReleaseFile(name,bytes,known=[]){
     const parts=address.split('.').map(Number);if(parts.some(n=>n>255))continue;
     if(address!=='127.0.0.1'&&!/^(?:192\.0\.2|198\.51\.100|203\.0\.113)\./.test(address))findings.push('non-documentation IP address');
   }
-  for(const {label,value}of known){if(!value||value.length<4)continue;const forms=[Buffer.from(value),Buffer.from(value,'utf16le'),Buffer.from(encodeURIComponent(value)),Buffer.from(Buffer.from(value).toString('base64'))];if(forms.some(v=>bytes.includes(v)))findings.push(label);}
+  for(const [address]of text.matchAll(/(?<![\w:])(?:[\da-f]{0,4}:){2,7}[\da-f]{0,4}(?:\.\d{1,3}){0,3}(?![\w:])/gi)){
+    if(isIP(address)===6&&!/^::1$|^2001:db8(?=:)/i.test(address))findings.push('non-documentation IP address');
+  }
+  for(const {label,value}of known){if(typeof value!=='string'||value.length<4)continue;const forms=[Buffer.from(value),Buffer.from(value,'utf16le'),Buffer.from(encodeURIComponent(value)),Buffer.from(Buffer.from(value).toString('base64'))];if(forms.some(v=>bytes.includes(v)))findings.push(label);}
   if(name.endsWith('.png'))for(let p=8;p+12<=bytes.length;){const size=bytes.readUInt32BE(p),kind=bytes.subarray(p+4,p+8).toString();if(['eXIf','tEXt','zTXt','iTXt'].includes(kind))findings.push('image metadata requiring manual review');if(p+size+12>bytes.length)break;p+=size+12;}
   if(jpeg)for(let p=2;p+4<=bytes.length;){if(bytes[p]!==255)break;const marker=bytes[p+1];if(marker===218||marker===217)break;const size=bytes.readUInt16BE(p+2);if([225,237,254].includes(marker))findings.push('image metadata requiring manual review');if(size<2||p+2+size>bytes.length)break;p+=2+size;}
   if(name.endsWith('.wav')&&bytes.subarray(0,4).toString()==='RIFF')for(let p=12;p+8<=bytes.length;){const size=bytes.readUInt32LE(p+4),kind=bytes.subarray(p,p+4).toString();if(!['fmt ','data','JUNK','PAD '].includes(kind))findings.push('audio metadata requiring manual review');if(p+size+8>bytes.length)break;p+=size+8+(size%2);}
   return [...new Set(findings)];
 }
-async function localDenyValues(){
+export async function localDenyValues(root){
   const values=[{label:'local home path',value:os.homedir()},{label:'local computer name',value:os.hostname()}];
+  const addAddress=value=>{
+    if(typeof value!=='string'||!value.trim())return;
+    values.push({label:'configured device address',value});
+    try{
+      const host=new URL(value.includes('://')?value:'http://'+value).hostname.replace(/^\[|\]$/g,'');
+      if(!['localhost','127.0.0.1','::1'].includes(host))values.push({label:'configured device host',value:host});
+    }catch{}
+  };
   const username=os.userInfo().username;if(!['root','runner','node','user','admin','administrator','ubuntu','system'].includes(username.toLowerCase()))values.push({label:'local OS account name',value:username});
-  try{const config=JSON.parse(await fs.readFile(process.env.TIINY_CONFIG || path.join(os.homedir(),'.local','tiiny','config.json'),'utf8'));values.push({label:'configured device address',value:config.deviceAddress},{label:'configured device key',value:config.account?.authKey});for(const key of ['email','username','displayName','name'])if(config.account?.[key])values.push({label:'configured account identifier',value:config.account[key]});}catch{}
-  for(const [name,label]of [['TIINY_KEY','environment device key'],['TIINY_HOST','environment device address']])if(process.env[name])values.push({label,value:process.env[name]});
+  try{const config=JSON.parse(await fs.readFile(process.env.TIINY_CONFIG || path.join(os.homedir(),'.local','tiiny','config.json'),'utf8'));addAddress(config.deviceAddress);values.push({label:'configured device key',value:config.account?.authKey});for(const key of ['email','username','displayName','name'])if(config.account?.[key])values.push({label:'configured account identifier',value:config.account[key]});}catch{}
+  try{
+    const saved=JSON.parse(await fs.readFile(path.join(process.env.SPINDLE_DATA_DIR || path.join(root,'data'),'connection.json'),'utf8'));
+    for(const key of ['endpoint','nativeEndpoint','managementEndpoint'])addAddress(saved[key]);
+    values.push({label:'remembered Spindle key',value:saved.key});
+  }catch{}
+  addAddress(process.env.TIINY_HOST);
+  values.push({label:'environment device key',value:process.env.TIINY_KEY});
   return values;
 }
 export async function buildRelease({root,output,known=[]}){
@@ -63,6 +81,6 @@ export async function buildRelease({root,output,known=[]}){
   await fs.writeFile(path.join(output,'RELEASE-MANIFEST.json'),JSON.stringify(manifest,null,2)+'\n',{flag:'wx'});return manifest;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  try{const i=process.argv.indexOf('--out');if(i<0||!process.argv[i+1])throw new Error('Usage: node scripts/release.mjs --out <new-directory>');const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),manifest=await buildRelease({root,output:process.argv[i+1],known:await localDenyValues()});console.log('Release scan passed: '+manifest.files.length+' source files. No runtime data copied.');}
+  try{const i=process.argv.indexOf('--out');if(i<0||!process.argv[i+1])throw new Error('Usage: node scripts/release.mjs --out <new-directory>');const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),manifest=await buildRelease({root,output:process.argv[i+1],known:await localDenyValues(root)});console.log('Release scan passed: '+manifest.files.length+' source files. No runtime data copied.');}
   catch(error){console.error(error.message);process.exitCode=1;}
 }
