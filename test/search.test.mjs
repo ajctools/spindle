@@ -68,13 +68,13 @@ test('weather chat reads a dated NWS forecast when the search snippet has no for
   assert.match(chatDetails({webSearch:search}),/NWS forecast for South Portland ME.*high near 57/);
 });
 
-test('two explicit weather locations get separate forecasts without NWS search results',async()=>{
+test('weather chat handles both place-first queries and two towns without NWS search results',async()=>{
   const locations=new Map([['Saco, ME','43.5'],['South Portland, ME','43.6']]);
   const lookedUp=[];
   const date=new Date();
   const time=date.toLocaleString('en-US',{hour:'numeric',minute:'2-digit',timeZone:'UTC'});
   const day=date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'});
-  const search=await searchWeb({query:"What's the weather today in Saco, ME and South Portland, ME?",fetcher:async url=>{
+  const fetcher=async url=>{
     if(url.hostname==='html.duckduckgo.com')return new Response('<a class="result__a" href="https://example.com/forecast">Weather results</a>');
     assert.equal(url.origin,'https://forecast.weather.gov');
     if(url.pathname==='/zipcity.php'){
@@ -84,9 +84,14 @@ test('two explicit weather locations get separate forecasts without NWS search r
     }
     const location=url.searchParams.get('lat')==='43.5'?'Saco ME':'South Portland ME';
     return new Response(`<b>NWS Forecast for: ${location}</b><br><a><b>Last Update: </b></a>${time} UTC ${day}</td><b>Today: </b>Sunny, with a high near 57. <br>`);
-  }});
+  };
+  const search=await searchWeb({query:"What's the weather today in Saco, ME and South Portland, ME?",fetcher});
   assert.deepEqual(lookedUp,[...locations.keys()]);
   assert.deepEqual(search.sources.filter(s=>s.forecast).map(s=>s.forecast.location),['Saco ME','South Portland ME']);
+  lookedUp.length=0;
+  const placeFirst=await searchWeb({query:'Saco, me weather today',fetcher});
+  assert.deepEqual(lookedUp,['Saco, ME']);
+  assert.equal(placeFirst.sources[0].forecast.location,'Saco ME');
 });
 
 test('weather chat keeps snippets when the NWS page is stale or the location redirects elsewhere',async()=>{
