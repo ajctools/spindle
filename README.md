@@ -92,7 +92,7 @@ The generated museum also offers two Tiiny-made surface textures, using supplied
 
 Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
 
-**Search the web before each message** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. Full pages are not fetched, citations are model-generated, and source claims need checking. No SDK is required.
+**Search the web before each message** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. For weather queries, Spindle can look up a U.S. city and state or ZIP code with the National Weather Service and include its dated forecast periods. Other results supply snippets. Citations are model-generated, so check the linked sources. No SDK is required.
 
 ![Compact chat with Send beside remembered web-search status and collapsed options](docs/images/chat.jpg)
 
