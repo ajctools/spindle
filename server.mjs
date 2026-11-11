@@ -43,7 +43,7 @@ const controllers=new Map();
 const modelLoads=new WeakMap();
 const meshPreviews=new Map();
 let sessionConnection=null;
-let deviceControl=false,cueRequests=0,chatPreload=null,chatDefaultsWrite=Promise.resolve();
+let deviceControl=false,cueRequests=0,chatPreload=null,chatDefaultsWrite=Promise.resolve(),meetingPreview=null;
 let searchKey=''; // Brave credentials are session-only, never part of runs or release data.
 const chatTrace=createChatTrace();
 const metricStore=await new MetricStore(DATA).load();
@@ -135,6 +135,15 @@ async function warmChatDefault(){
   return {status:'ready'};
 }
 function textOf(j){return j?.choices?.[0]?.message?.content || j?.text || j?.data?.text || j?.result?.text || (Array.isArray(j?.data)?j.data.map(x=>x.text || '').filter(Boolean).join('\n'):null) || null;}
+function asrForm(model,file,params={}){
+  const normalized=transcriptionPCM(file);
+  validatePCM(normalized);
+  const {buffer,mime,name}=parseDataUrl(normalized),body=new FormData();
+  body.set('model',model);
+  body.set('file',new Blob([buffer],{type:mime}),name);
+  for(const [key,value] of Object.entries(params))body.set(key,String(value));
+  return body;
+}
 async function asset(buffer,mime,label='output'){
   if(buffer.subarray(0,4).toString()==='RIFF'&&buffer.subarray(8,12).toString()==='WAVE')mime='audio/wav';
   else if(buffer.subarray(0,4).toString()==='glTF')mime='model/gltf-binary';
@@ -252,7 +261,7 @@ async function execute(step,signal,job){
   else if(step.task==='ocr'){
     parseDataUrl(file);route='/v1/ocr'+(model.id.includes('DocLayout')?'/layout':'')+'?model='+encodeURIComponent(model.id);body={input:file.data,response_format:'json',...p};
   }else if(step.task==='asr'){
-    const normalized=transcriptionPCM(file);validatePCM(normalized);const f=parseDataUrl(normalized);body=new FormData();body.set('model',model.id);body.set('file',new Blob([f.buffer],{type:f.mime}),f.name);for(const [k,v]of Object.entries(p))body.set(k,String(v));
+    body=asrForm(model.id,file,p);
   }else if(step.task==='mesh'){
     if(job.museum){try{const caps=await remoteJSON('/v1/3d/capabilities?model='+encodeURIComponent(model.id),{signal,timeout:15000});job.museum.meshRuntime=caps;p.params=museumMeshParams(caps,p.params);job.museum.effectiveMeshParams=p.params;await saveJobs();}catch(e){job.museum.meshRuntimeError=redactError(e);}}
     const f=parseDataUrl(file);body=new FormData();body.set('model',model.id);body.set('stage',p.stage || 'shape');body.set('params',JSON.stringify(p.params || {}));body.set('image',new Blob([f.buffer],{type:f.mime}),f.name);
@@ -393,7 +402,7 @@ async function authorInference(job,kind,prompt,modelId,shot,signal){
 
 async function startQueue(){
   if(active)return;active=true;
-  try{await chatPreload?.catch(()=>{});for(let job; (job=jobs.find(j=>j.status==='queued'));){
+  try{await chatPreload?.catch(()=>{});await meetingPreview?.catch(()=>{});for(let job; (job=jobs.find(j=>j.status==='queued'));){
     const controller=new AbortController();let finalStatus='completed';controllers.set(job.id,controller);job.status='running';job.startedAt=new Date().toISOString();await saveJobs();
     try{if(!job.museum)await rememberLoadedModels(job);
     if(job.roughCut){
@@ -524,7 +533,7 @@ function redactJob(j){
   const show=o=>o?{...o,assets:o.assets?.filter(a=>!trashed.has(path.basename(a.url)))}:o;
   return {...j,file:undefined,modelLoad:j.status==='running'?modelLoads.get(j):undefined,outputs:j.outputs.map(show),finalOutput:show(j.finalOutput),steps:j.steps.map(s=>({...s,file:undefined,messages:undefined}))};
 }
-async function jsonBody(req){let len=0;const parts=[];for await(const p of req){len+=p.length;if(len>90*1024*1024)throw new Error('Request too large.');parts.push(p);}try{return JSON.parse(Buffer.concat(parts).toString() || '{}');}catch{throw new Error('The request body is not valid JSON.');}}
+async function jsonBody(req,limit=90*1024*1024){let len=0;const parts=[];for await(const p of req){len+=p.length;if(len>limit)throw new Error('Request too large.');parts.push(p);}try{return JSON.parse(Buffer.concat(parts).toString() || '{}');}catch{throw new Error('The request body is not valid JSON.');}}
 function send(res,value,status=200){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
 async function cancel(job){
   job.status='cancelled';controllers.get(job.id)?.abort();
@@ -661,29 +670,50 @@ const server=http.createServer(async(req,res)=>{
     }
     if(p==='/api/chat/default/load'&&req.method==='POST'){
       await jsonBody(req);
+      if(meetingPreview){send(res,{status:'busy'});return;}
       chatPreload??=warmChatDefault().finally(()=>{chatPreload=null;});
       send(res,await chatPreload);return;
     }
     if(p==='/api/connection'&&req.method==='GET'){const i=await configInfo();send(res,publicConnection(i.connection,i.source,i.remembered));return;}
     if(['/api/connection','/api/connection/test'].includes(p)&&req.method==='POST'){
-      if((active||chatPreload)&&p==='/api/connection')throw new Error('Wait for current device work before changing a connection.');
+      if((active||chatPreload||meetingPreview)&&p==='/api/connection')throw new Error('Wait for current device work before changing a connection.');
       const b=await jsonBody(req),current=await configInfo();
       const candidate=normalizeConnection({...b,key:b.key || current.connection?.key});
       if(!b.key&&candidate.endpoint!==current.connection?.endpoint)throw new Error('Enter the key for the new endpoint. Existing keys are never forwarded to another endpoint automatically.');
       const live=await remoteJSON('/v1/models',{connection:candidate,transport:'openai',timeout:15000});
       if(!Array.isArray(live.data))throw new Error('The endpoint did not return an OpenAI-compatible model list.');
       if(p.endsWith('/test')){send(res,{ok:true,loadedModels:live.data.length});return;}
-      if(active||chatPreload)throw new Error('Wait for current device work before changing a connection.');
+      if(active||chatPreload||meetingPreview)throw new Error('Wait for current device work before changing a connection.');
       if(process.env.TIINY_HOST||process.env.TIINY_KEY)throw new Error('Environment connection settings take precedence. Remove them before saving another connection.');
       if(b.remember){await writeJSON('connection.json',{endpoint:candidate.endpoint,nativeEndpoint:candidate.nativeBase,managementEndpoint:candidate.managementBase,hostRouting:candidate.hostRouting,key:candidate.key});sessionConnection=null;}
       else{sessionConnection=candidate;await fs.rm(path.join(DATA,'connection.json'),{force:true});}
       cached=null;send(res,{ok:true,...publicConnection(candidate,b.remember?'Saved in Spindle':'Spindle session',!!b.remember)});return;
     }
     if(p==='/api/connection/reset'&&req.method==='POST'){
-      if(active||chatPreload)throw new Error('Wait for current device work before resetting the connection.');
+      if(active||chatPreload||meetingPreview)throw new Error('Wait for current device work before resetting the connection.');
       sessionConnection=null;await fs.rm(path.join(DATA,'connection.json'),{force:true});cached=null;send(res,{ok:true});return;
     }
     if(p==='/api/runs'&&req.method==='GET'){await saveChain.catch(()=>{});send(res,jobs.map(redactJob));return;}
+    if(p==='/api/meeting/preview'&&req.method==='POST'){
+      if(process.env.SPINDLE_DEMO==='1')throw Error('Use your regular Spindle session for live transcript preview.');
+      const {file,model}=await jsonBody(req,900_000);
+      if(!cached?.models.some(item=>item.id===model&&item.installed&&item.tasks.includes('asr')))throw Error('Choose a downloaded transcription model.');
+      if(meetingRecording(file).duration>20)throw Error('Live preview clips must be 20 seconds or shorter.');
+      if(active||chatPreload||deviceControl||cueRequests||meetingPreview||jobs.some(job=>job.status==='queued')){
+        send(res,{status:'busy'});return;
+      }
+      meetingPreview=(async()=>{
+        const signal=AbortSignal.timeout(20_000);
+        const live=list(await remoteJSON('/v1/models',{transport:'openai',timeout:5000,signal}));
+        if(!live.some(item=>item.id===model))return {status:'unloaded'};
+        const result=await remoteJSON(tasks.asr.route,{method:'POST',transport:tasks.asr.transport,body:asrForm(model,file),signal});
+        if(result.success===false||result.error)throw Error('The transcription model could not process this preview clip.');
+        const transcript=textOf(result);
+        return {status:'ready',text:typeof transcript==='string'?transcript.trim():''};
+      })();
+      try{send(res,await meetingPreview);}finally{meetingPreview=null;}
+      return;
+    }
     if(p==='/api/meeting/transcribe'&&req.method==='POST'){
       if(process.env.SPINDLE_DEMO==='1')throw Error('Use your regular Spindle session to transcribe a meeting.');
       const {file,model,title}=await jsonBody(req),{models}=cached||await inventory();
@@ -753,7 +783,7 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/device/power'&&req.method==='POST'){
       const {action,enabled,confirm}=await jsonBody(req);
       if(confirm!==true||!['restart','shutdown','ac-power'].includes(action)||(action==='ac-power'&&typeof enabled!=='boolean'))throw Error('Confirm a supported power action.');
-      if(deviceControl||chatPreload||active||cueRequests||jobs.some(j=>j.status==='queued'))throw Error('Wait for the current Tiiny task before changing power settings.');
+      if(deviceControl||chatPreload||active||cueRequests||meetingPreview||jobs.some(j=>j.status==='queued'))throw Error('Wait for the current Tiiny task before changing power settings.');
       deviceControl=true;
       try{
         const connection=await config();
@@ -770,7 +800,7 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/foley/cue'&&req.method==='POST'){
       const {text}=await jsonBody(req);
       if(typeof text!=='string'||!text.trim()||text.length>600)throw Error('Enter a story beat up to 600 characters.');
-      if(active||deviceControl||chatPreload||cueRequests>=3)throw Error('Tiiny is busy. Try again in a moment.');
+      if(active||deviceControl||chatPreload||meetingPreview||cueRequests>=3)throw Error('Tiiny is busy. Try again in a moment.');
       cueRequests++;
       try{
         const model=await foleyModel();
@@ -984,7 +1014,7 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/model'&&req.method==='POST'){
       const {id,action}=await jsonBody(req);if(!['start','stop','download'].includes(action)||!cached?.models.some(m=>m.id===id))throw new Error('Unknown model action.');
       if(deviceControl||chatPreload)throw new Error('Wait for the device action before changing models.');
-      if(active&&['start','stop'].includes(action))throw new Error('Wait for the current run before changing loaded models.');
+      if((active||meetingPreview)&&['start','stop'].includes(action))throw new Error('Wait for the current run before changing loaded models.');
       if(action!=='download')deviceControl=true;
       try{await remote('/api/v1/models/'+encodeURIComponent(id)+'/'+action,{method:'POST',body:{},timeout:300000});if(action!=='download')await waitModel(id,action==='start');}
       finally{if(action!=='download')deviceControl=false;}

@@ -102,7 +102,7 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 
 **PromptDex** comes with 20 recipes for clearer writing, model checks, vision, and workflow handoffs. Fill a sample, review the prompt, and insert it into Chat. Compare two downloaded models with the same input and response allowance, then review their answers and timings side by side.
 
-**Meeting Desk** records microphone or shared-tab audio and imports recordings up to 30 minutes. Transcribe on Tiiny, jump to timestamped sections, and prepare an editable web search from a hotword match. Only the query you submit goes to the search provider.
+**Meeting Desk** records microphone or shared-tab audio and imports recordings up to 30 minutes. With an ASR model already loaded on Tiiny, you can preview text while recording. Select **Transcribe** after recording to save the full transcript and see each audio section as it finishes. Jump to timestamped sections and prepare an editable web search from a hotword match. Only the query you submit goes to the search provider.
 
 **Security & Privacy** shows where Spindle sent chat and search traffic, along with transport and response metadata. The Chat composer also previews destinations and offers **Send to Tiiny only** for a single message.
 

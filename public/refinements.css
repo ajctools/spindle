@@ -97,10 +97,15 @@
 .meeting-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}
 .meeting-controls .field{margin:0}
 .meeting-controls .actions,.meeting-controls .help{grid-column:1/-1;margin:0}
+.meeting-preview-toggle{grid-column:1/-1;display:flex;align-items:center;gap:8px;width:fit-content}
+.meeting-preview-toggle input{width:auto}
 .meeting-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px}
 .meeting-grid audio{width:100%;margin-bottom:10px}
+.meeting-grid progress{width:100%;accent-color:var(--accent)}
 .meeting-grid .field{margin-top:8px}
-#meeting-transcript article,.meeting-hit{border-top:1px solid var(--line);padding:10px 0;overflow-wrap:anywhere}
+#meeting-preview{margin:12px 0}
+#meeting-preview-lines{max-height:18rem;overflow:auto}
+#meeting-preview-lines article,#meeting-transcript article,.meeting-hit{border-top:1px solid var(--line);padding:10px 0;overflow-wrap:anywhere}
 .meeting-hit strong{display:block;margin-bottom:4px}
 .meeting-hit p{margin-bottom:8px}
 #meeting-research-results li{margin-bottom:8px}

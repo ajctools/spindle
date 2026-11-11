@@ -82,6 +82,7 @@ async function openMeetingDesk(){
       const {createMeetingDesk}=await import('./meeting-desk.mjs');
       meetingDesk??=createMeetingDesk({
         api,escape:esc,getRuns:()=>runs,modelOptions,preferred,
+        isLoaded:id=>state.models.some(model=>model.id===id&&model.loaded),onModelLoaded:()=>refresh(false),
         onQueued:run=>{runs=[run,...runs.filter(item=>item.id!==run.id)];void poll();},
       });
     }catch{

@@ -190,7 +190,7 @@ Physical-device checks, when run, are recorded separately in the local readiness
 
 ## Boundaries
 
-Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. The Transcribe workspace accepts browser-decodable recordings up to 15 minutes per file. Meeting Desk accepts up to 30 minutes and queues minute-long chunks. The 3D workspace submits the shape stage; a full generated texture pipeline is not implemented. The museum can display a bounded subset of embedded GLB geometry.
+Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. The Transcribe workspace accepts browser-decodable recordings up to 15 minutes per file. Meeting Desk accepts up to 30 minutes and shows progress as each minute-long section finishes. While recording, optional live preview sends approximately 10-second clips to an already loaded ASR model. Preview text stays in the current browser view, and Tiiny can skip clips when busy. Use **Transcribe** to save the full transcript. The 3D workspace submits the shape stage; a full generated texture pipeline is not implemented. The museum can display a bounded subset of embedded GLB geometry.
 
 Runs and outputs survive server restarts. Active/queued runs become interrupted and require explicit rerunning. A terminated server cannot guarantee model restoration. No OS startup service or scheduled job is installed.
 

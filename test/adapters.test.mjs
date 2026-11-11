@@ -14,19 +14,21 @@ test('all multimodal adapters preserve their request and output contracts',async
   const wav=Buffer.alloc(46);wav.write('RIFF');wav.writeUInt32LE(38,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(2,40);
   const models=Object.entries(tasks).map(([k,v])=>({id:'fixture/'+k,model_id:'fixture/'+k,name:k,type:v.types[0],input:k==='chat'?'Text,Image':'Text',output:v.output,npu_usage:0}));
   const seen=new Set();
+  let asrLoaded=true,previewRequests=0;
   const device=http.createServer(async(req,res)=>{
     const parts=[];for await(const p of req)parts.push(p);const raw=Buffer.concat(parts),url=new URL(req.url,'http://fixture'),p=url.pathname;
     const json=j=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(j));};
     const binary=(b,m)=>{res.setHeader('content-type',m);res.end(b);};
     assert.equal(req.headers.authorization,'Bearer adapter-key');
     if(p==='/api/v1/models/online_models')return json(models);
-    if(p==='/api/v1/models/'||p==='/v1/models')return json({data:models});
+    if(p==='/api/v1/models/')return json({data:models});
+    if(p==='/v1/models')return json({data:models.filter(model=>asrLoaded||model.id!=='fixture/asr')});
     if(p==='/api/v1/npu/status')return json({devices:[]});
     if(p==='/v1/music/info')return json({model_info:{model:{supported_generation_types:['mixed']}},default_config:{generation_type:'mixed'}});
     if(p==='/v1/chat/completions'){seen.add('chat');assert.equal(JSON.parse(raw).model,'fixture/chat');return json({choices:[{message:{content:'Hello from the device.'}}]});}
     if(p==='/v1/images/generations'){seen.add('image');assert.equal(JSON.parse(raw).size,'512x512');return json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:10,output_tokens:90,total_tokens:100}});}
     if(p==='/v1/image/generate'){seen.add('edit');assert.match(JSON.parse(raw).image,/^data:image/);res.setHeader('X-Token-Usage',JSON.stringify({input_tokens:5,output_tokens:45,total_tokens:50}));return binary(png,'image/png');}
-    if(p==='/v1/audio/transcriptions'){seen.add('asr');assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.'});}
+    if(p==='/v1/audio/transcriptions'){seen.add('asr');if(raw.includes(Buffer.from('preview.wav')))previewRequests++;assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.'});}
     if(p==='/v1/audio/speech'){seen.add('speech');return json({success:true,audio_data:wav.toString('base64')});}
     if(p==='/v1/music/generate/wav'){seen.add('music');const b=JSON.parse(raw);assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyric_text,'[instrumental]');return binary(wav,'audio/wav');}
     if(p==='/v1/ocr'){seen.add('ocr');assert.equal(url.searchParams.get('model'),'fixture/ocr');assert.equal(JSON.parse(raw).model,undefined);return json({data:[{text:'Invoice 1042'}]});}
@@ -46,6 +48,17 @@ test('all multimodal adapters preserve their request and output contracts',async
     const home=await fetch(base),cookie=home.headers.get('set-cookie').split(';')[0];
     const get=route=>fetch(base+route,{headers:{cookie}});await get('/api/state');
     const image={name:'fixture.png',data:'data:image/png;base64,'+png.toString('base64')},audio={name:'fixture.wav',data:'data:audio/wav;base64,'+wav.toString('base64')};
+    const preview=()=>fetch(base+'/api/meeting/preview',{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify({model:'fixture/asr',file:{...audio,name:'preview.wav'}})});
+    asrLoaded=false;
+    assert.deepEqual(await (await preview()).json(),{status:'unloaded'});
+    assert.equal(previewRequests,0);
+    asrLoaded=true;
+    const previewResult=await preview();
+    assert.equal(previewResult.status,200);
+    assert.deepEqual(await previewResult.json(),{status:'ready',text:'A transcribed sentence.'});
+    assert.equal(previewRequests,1);
+    assert.deepEqual(await (await get('/api/runs')).json(),[]);
+    assert.deepEqual(await fs.readdir(path.join(data,'assets')),[]);
     const steps=Object.keys(tasks).map(task=>({task,model:'fixture/'+task,prompt:'Test input',params:task==='image'?{width:512,height:512}:{},documents:task==='rerank'?['Relevant','Unrelated']:undefined,file:['ocr','mesh'].includes(task)?image:task==='asr'?audio:undefined}));
     steps.push({task:'image',model:'fixture/image',prompt:'Edit this image',file:image,params:{}});
     const created=await(await fetch(base+'/api/run',{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify({steps})})).json();
