@@ -107,7 +107,8 @@ function workbench(){
     const input=form.querySelector('#prompt')?.value || '',messages=task==='chat'?chat.map(({role,content})=>({role,content})):[],switchModels=form.querySelector('#auto-model').checked;
     button.disabled=true;
     try{
-      const s=await getStep(),j=await api('/api/run',{name:state.tasks[s.task].label,input,steps:[{...s,prompt:'{{input}}',messages}],switchModels});
+      const s=await getStep(),chatStep=s.task==='chat';
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels});
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
       if(s.task==='chat'){chat.push({role:'user',content:input});$('#prompt').value='';resizePrompt();}
