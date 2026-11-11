@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatMessage,chatSettings,readChatResponse} from '../chat.mjs';
-import {chatDetails,withResponseLimit} from '../public/chat-ui.mjs';
+import {chatDetails,chatMarkdown,withResponseLimit} from '../public/chat-ui.mjs';
 import {loadChatOptions,saveChatOptions,ampleResponseTokens} from '../public/chat-settings.mjs';
 import {createMetric} from '../metrics.mjs';
 
@@ -71,4 +71,32 @@ test('reasoning and source cards render inert text and safe links',()=>{
   assert.ok(chatDetails({finishReason:'length',responseLimit:16384}).includes('16,384-token limit'));
   const uncapped=chatDetails({finishReason:'length',responseLimit:null});assert.ok(uncapped.includes('Spindle did not set a token cap'));assert.ok(uncapped.includes('Maximum response tokens'));
   const exhausted=chatDetails({finishReason:'length',responseLimit:4096,reasoning:'Thinking only',text:''});assert.ok(exhausted.includes('before an answer arrived'));assert.ok(exhausted.includes('resend your prompt'));assert.ok(!exhausted.includes('ask the model to continue'));
+});
+
+test('assistant replies format a forecast table, paragraphs, emphasis, and lists',()=>{
+  const html=chatMarkdown([
+    'Here is the **National Weather Service** forecast.',
+    '',
+    '| Day | Forecast |',
+    '|-----|----------|',
+    '| **Tonight** | Mostly cloudy, low around 36°F. |',
+    '| **Thursday** | Chance of rain. |',
+    '',
+    '**Summary:**',
+    '- **Thursday:** A chance of rain.',
+    '- Check the [official forecast](https://example.com/forecast).',
+  ].join('\n'));
+  assert.match(html,/<p>Here is the <strong>National Weather Service<\/strong> forecast\.<\/p>/);
+  assert.match(html,/<th scope="col">Day<\/th><th scope="col">Forecast<\/th>/);
+  assert.match(html,/<td><strong>Tonight<\/strong><\/td><td>Mostly cloudy, low around 36°F\.<\/td>/);
+  assert.match(html,/<ul><li><strong>Thursday:<\/strong> A chance of rain\.<\/li>/);
+  assert.match(html,/<a href="https:\/\/example\.com\/forecast"[^>]*>official forecast<\/a>/);
+});
+
+test('assistant Markdown leaves raw HTML and code inert and never embeds remote images',()=>{
+  const html=chatMarkdown('<img src="https://example.com/html.png">\n[unsafe](javascript:bad)\n![caption](https://example.com/remote.png)\n\n```html\n<b>literal</b>\n```');
+  assert.ok(html.includes('&lt;img'));
+  assert.ok(html.includes('<pre><code>&lt;b&gt;literal&lt;/b&gt;</code></pre>'));
+  assert.ok(html.includes('caption'));
+  assert.doesNotMatch(html,/<img|<a |remote\.png|javascript:/);
 });
