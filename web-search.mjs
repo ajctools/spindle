@@ -47,7 +47,8 @@ function placeURL(place){
 
 function forecastPlaces(query){
   // Only forward place names or ZIP codes from an explicit weather query.
-  const match=query.match(/\b(?:weather|forecast)\b[^?!.]{0,45}?\b(?:in|for|at)\s+(.+?)[?!.]*$/i);
+  const match=query.match(/\b(?:weather|forecast)\b[^?!.]{0,45}?\b(?:in|for|at)\s+(.+?)[?!.]*$/i)
+    ?? query.match(/^(.+?)\s+(?:weather|forecast)(?:\s+(?:today|tonight|tomorrow|this week))?[?!.]*$/i);
   if(!match)return [];
   const names=match[1].split(/\s+(?:and|&)\s+|;\s*/i);
   if(names.length>2)return [];
