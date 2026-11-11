@@ -53,6 +53,34 @@ test('history filters and percentiles include media tokens once and retain cover
   assert.equal(filterMetrics([nearMidnight],{...options,now:Date.parse('2026-11-10T03:00:00Z')}).length,1);
 });
 
+test('daily cloud usage reconciles with the selected period as it rolls over at local midnight',()=>{
+  const chat={status:'completed',task:'chat',model:'m',benchmark:true,profile:{hasFile:false}};
+  const records=[
+    {...chat,startedAt:'2026-11-04T14:00:00Z',inputTokens:100,outputTokens:200},
+    {...chat,startedAt:'2026-11-07T14:00:00Z',inputTokens:10,outputTokens:null},
+    {...chat,startedAt:'2026-11-11T04:59:00Z',inputTokens:30,outputTokens:40},
+    {...chat,startedAt:'2026-11-11T04:59:00Z',inputTokens:50,outputTokens:60,benchmark:false},
+    {...chat,startedAt:'2026-11-11T05:00:00Z',inputTokens:0,outputTokens:0},
+  ];
+  const options={days:7,timeZone:'America/New_York',benchmarks:true};
+  const before=summarize(records,{...options,now:Date.parse('2026-11-11T04:59:00Z')});
+  assert.deepEqual(before.period,{startDate:'2026-11-04',endDate:'2026-11-10'});
+  assert.deepEqual(before.cloudUsage,{inputTokens:130,outputTokens:240,covered:2,completed:3,excluded:1});
+
+  const now=Date.parse('2026-11-11T05:00:00Z');
+  const after=summarize(records,{...options,now});
+  assert.deepEqual(after.period,{startDate:'2026-11-05',endDate:'2026-11-11'});
+  assert.deepEqual(after.cloudUsage,{inputTokens:30,outputTokens:40,covered:2,completed:3,excluded:1});
+  assert.deepEqual(after.dailyCloudUsage,[
+    {date:'2026-11-07',inputTokens:0,outputTokens:0,covered:0,completed:1,excluded:1},
+    {date:'2026-11-10',inputTokens:30,outputTokens:40,covered:1,completed:1,excluded:0},
+    {date:'2026-11-11',inputTokens:0,outputTokens:0,covered:1,completed:1,excluded:0},
+  ]);
+  const allTime=summarize(records,{...options,days:0,now});
+  assert.deepEqual(allTime.period,{startDate:null,endDate:'2026-11-11'});
+  assert.equal(allTime.cloudUsage.inputTokens,130);
+});
+
 test('measurement journal survives restart, duplicate writes and an interrupted final line',async()=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'spindle-metrics-'));
   try{

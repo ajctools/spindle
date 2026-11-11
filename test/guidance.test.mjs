@@ -13,6 +13,8 @@ test('workflow guidance accepts a valid image-to-video handoff and catches wrong
 });
 test('recovery sends authentication failures to Connection and keeps a precise workflow fix visible',()=>{
   assert.equal(recovery('Tiiny 401: Invalid API key').action,'connection');
+  assert.equal(recovery('The configured Tiiny endpoint returned an HTML page instead of an API response (HTTP 200).').action,'connection');
+  assert.equal(recovery('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON').action,'connection');
   const message='Step 2: Transcription needs audio.';assert.equal(recovery(message).text,message);
   assert.equal(recovery('The NPU stayed busy.').action,'models');
 });

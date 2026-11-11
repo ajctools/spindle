@@ -79,22 +79,30 @@ export function createMetric({job,step,index,output,startedAt,finishedAt,executi
     benchmark:!!job.benchmark,suite:job.benchmark?'spindle-text-v1':null,legacy,rawUsage:usage.rawUsage || null,rawTimings:usage.rawTimings || null};
 }
 export function percentile(values,q){const a=values.filter(v=>number(v)!==null).sort((a,b)=>a-b);if(!a.length)return null;const p=(a.length-1)*q,l=Math.floor(p);return a[l]+(a[Math.ceil(p)]-a[l])*(p-l);}
-export function filterMetrics(records,{days=7,timeZone='UTC',task='all',model='all',benchmarks=false,now=Date.now()}={}){
-  try{new Intl.DateTimeFormat('en-CA',{timeZone}).format(new Date());}catch{timeZone='UTC';}
+function metricPeriod({days=7,timeZone='UTC',now=Date.now()}={}){
+  try{new Intl.DateTimeFormat('en-CA',{timeZone});}catch{timeZone='UTC';}
   const formatter=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}),date=t=>formatter.format(new Date(t));
-  const today=date(now),firstDate=new Date(today+'T12:00:00Z');firstDate.setUTCDate(firstDate.getUTCDate()-(days-1));const firstDay=days===0?'0000-00-00':firstDate.toISOString().slice(0,10);
-  return records.filter(r=>{if(!Number.isFinite(Date.parse(r.startedAt)))return false;const day=date(r.startedAt);return day>=firstDay&&day<=today&&(task==='all'||r.task===task)&&(model==='all'||r.model===model)&&(!benchmarks||r.benchmark);});
+  const endDate=date(now),firstDate=new Date(endDate+'T12:00:00Z');
+  firstDate.setUTCDate(firstDate.getUTCDate()-(days-1));
+  return {timeZone,date,startDate:days===0?null:firstDate.toISOString().slice(0,10),endDate};
+}
+function selectMetrics(records,{date,startDate,endDate},{task='all',model='all',benchmarks=false}){
+  return records.filter(r=>{if(!Number.isFinite(Date.parse(r.startedAt)))return false;const day=date(r.startedAt);return (!startDate||day>=startDate)&&day<=endDate&&(task==='all'||r.task===task)&&(model==='all'||r.model===model)&&(!benchmarks||r.benchmark);});
+}
+export function filterMetrics(records,options={}){
+  return selectMetrics(records,metricPeriod(options),options);
 }
 export function summarize(records,options={}){
-  const {days=7}=options;let timeZone=options.timeZone || 'UTC';try{new Intl.DateTimeFormat('en-CA',{timeZone});}catch{timeZone='UTC';}
-  const rows=filterMetrics(records,{...options,timeZone});
-  const formatter=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}),date=t=>formatter.format(new Date(t));
+  const {days=7}=options,period=metricPeriod(options),{timeZone,date,startDate,endDate}=period;
+  const rows=selectMetrics(records,period,options);
   const complete=rows.filter(r=>r.status==='completed'),durations=complete.map(r=>r.executionMs),known=complete.filter(r=>number(r.totalTokens)!==null),sum=(a,key)=>a.reduce((n,r)=>n+(number(r[key])??0),0);
-  const perDay=new Map(),groups=new Map();
+  const perDay=new Map(),groups=new Map(),chatByDay=new Map();
   for(const r of rows){const key=date(r.startedAt),d=perDay.get(key)||{date:key,totalTokens:0,inputTokens:0,outputTokens:0,requests:0,completed:0,executionMs:0,reported:0};d.requests++;if(r.status==='completed'){d.completed++;d.totalTokens+=r.totalTokens || 0;d.inputTokens+=r.inputTokens || 0;d.outputTokens+=r.outputTokens || 0;d.executionMs+=r.executionMs || 0;if(r.totalTokens!==null)d.reported++;}perDay.set(key,d);
+    if(r.task==='chat'){const chat=chatByDay.get(key)||[];chat.push(r);chatByDay.set(key,chat);}
     const id=r.task+'|'+r.model,group=groups.get(id)||{task:r.task,model:r.model,records:[]};group.records.push(r);groups.set(id,group);}
   const activity=[...perDay.values()].sort((a,b)=>a.date.localeCompare(b.date));
-  return {timeZone,days,cloudUsage:cloudUsage(rows),totals:{requests:rows.length,completed:complete.length,failed:rows.filter(r=>r.status==='failed').length,totalTokens:known.length?sum(known,'totalTokens'):null,inputTokens:complete.some(r=>r.inputTokens!==null)?sum(complete,'inputTokens'):null,outputTokens:complete.some(r=>r.outputTokens!==null)?sum(complete,'outputTokens'):null,tokenReported:known.length,tokenMissing:complete.length-known.length,
+  const dailyCloudUsage=activity.map(({date})=>({date,...cloudUsage(chatByDay.get(date)||[])})).filter(day=>day.completed);
+  return {timeZone,days,period:{startDate,endDate},cloudUsage:cloudUsage(rows),dailyCloudUsage,totals:{requests:rows.length,completed:complete.length,failed:rows.filter(r=>r.status==='failed').length,totalTokens:known.length?sum(known,'totalTokens'):null,inputTokens:complete.some(r=>r.inputTokens!==null)?sum(complete,'inputTokens'):null,outputTokens:complete.some(r=>r.outputTokens!==null)?sum(complete,'outputTokens'):null,tokenReported:known.length,tokenMissing:complete.length-known.length,
       medianMs:percentile(durations,.5),p95Ms:percentile(durations,.95),executionMs:sum(complete,'executionMs'),decodeTps:percentile(complete.filter(r=>r.task==='chat').map(r=>r.decodeTps),.5),prefillTps:percentile(complete.filter(r=>r.task==='chat').map(r=>r.prefillTps),.5),images:sum(complete,'imageCount'),videos:sum(complete,'videoCount'),audioFiles:sum(complete,'audioCount')},activity,
     groups:[...groups.values()].map(g=>{const ok=g.records.filter(r=>r.status==='completed'),reported=ok.filter(r=>r.totalTokens!==null);return {task:g.task,model:g.model,count:g.records.length,completed:ok.length,tokenReported:reported.length,totalTokens:reported.length?sum(reported,'totalTokens'):null,medianMs:percentile(ok.map(r=>r.executionMs),.5),p95Ms:percentile(ok.map(r=>r.executionMs),.95),decodeTps:g.task==='chat'?percentile(ok.map(r=>r.decodeTps),.5):null,framesPerSecond:percentile(ok.map(r=>r.framesPerSecond),.5),audioRealtimeFactor:percentile(ok.map(r=>r.audioRealtimeFactor),.5),lastAt:g.records.at(-1)?.startedAt};}).sort((a,b)=>b.count-a.count),
     taskStats:Object.fromEntries([...new Set(rows.map(r=>r.task))].map(task=>{const r=complete.filter(r=>r.task===task);return [task,{medianMs:percentile(r.map(r=>r.executionMs),.5),p95Ms:percentile(r.map(r=>r.executionMs),.95),decodeTps:percentile(r.map(r=>r.decodeTps),.5),framesPerSecond:percentile(r.map(r=>r.framesPerSecond),.5),audioRealtimeFactor:percentile(r.map(r=>r.audioRealtimeFactor),.5)}];})),

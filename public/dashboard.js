@@ -52,7 +52,7 @@ export function mountDashboard(root,{api,getState,navigate,toast}){
   function query(){return new URLSearchParams({days:filter.days,task:filter.task,model:filter.model,benchmarks:String(filter.benchmarks),tz:Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'});}
   function exports(){const q=query();$('#dash-csv').href='/metrics.csv?'+q;$('#dash-json').href='/metrics.json?'+q;}
   function render(){
-    if(!alive||!data)return;const t=data.totals;updateCosts(data.cloudUsage);
+    if(!alive||!data)return;const t=data.totals;updateCosts(data);
     put('#dash-kpis',[
       ['Reported tokens',compact(t.totalTokens),`${compact(t.inputTokens)} in <i>↗</i> ${compact(t.outputTokens)} out`,`${t.tokenReported}/${t.completed} tasks reported totals`,'lime'],
       ['Completed tasks',n(t.completed,0),`${n(t.images,0)} images · ${n(t.videos,0)} videos · ${n(t.audioFiles,0)} audio`,`${t.failed} failed · ${data.benchmarkCount} benchmark samples`,''],

@@ -24,3 +24,61 @@ export function redactError(value,secrets=[]){
   for(const secret of secrets.filter(v=>typeof v==='string'&&v.length>0))for(const variant of new Set([secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')]))text=text.replaceAll(variant,'[redacted]');
   return text.replace(/\b[A-Za-z]:[\\/](?:[^\s"'<>]|\\ )+/g,'[local path]').replace(/\/(?:Users|home)\/[^\s"'<>]+/g,'[local path]');
 }
+
+export function createChatTrace(){
+  const duration=5*60_000,limit=100;
+  let capture=null,timer=null;
+  function stop(){
+    if(capture?.active)capture.active=false;
+    clearTimeout(timer);
+    timer=null;
+  }
+  function start(){
+    if(capture?.active)return;
+    const startedAt=Date.now();
+    capture={active:true,startedAt,endsAt:startedAt+duration,events:[],dropped:0};
+    timer=setTimeout(stop,duration).unref();
+  }
+  function clear(){stop();capture=null;}
+  function snapshot(redacted=false){
+    if(!capture)return {active:false,events:[],dropped:0};
+    if(!redacted)return capture;
+    const runNumbers=new Map();
+    const events=capture.events.map(({runId,origin,...event})=>{
+      if(runId&&!runNumbers.has(runId))runNumbers.set(runId,runNumbers.size+1);
+      return {...event,run:runNumbers.get(runId)??null,origin:['chat','check'].includes(event.kind)||event.unexpected?null:origin};
+    });
+    return {...capture,events};
+  }
+  async function request(url,options,{runId,kind,sent,expectedOrigin}){
+    if(!capture?.active)return fetch(url,options);
+    const recording=capture,destination=url instanceof URL?url:new URL(url);
+    const event={at:Date.now(),runId,kind,sent,origin:destination.origin,protocol:destination.protocol,
+      unexpected:destination.origin!==expectedOrigin,outcome:'pending'};
+    const check=kind==='check';
+    const record=()=>{
+      if(recording.events.length===limit){recording.events.shift();recording.dropped++;}
+      recording.events.push(event);
+    };
+    if(!check)record();
+    const started=performance.now();
+    let response;
+    try{response=await fetch(url,options);}
+    catch(error){
+      if(recording.active){
+        event.outcome=options.signal?.reason?.name==='TimeoutError'?'timeout':options.signal?.aborted?'aborted':'failed';
+        if(check)record();
+      }
+      throw error;
+    }
+    if(recording.active){
+      const type=response.headers.get('content-type')?.split(';',1)[0]?.trim().toLowerCase();
+      Object.assign(event,{outcome:'headers',status:response.status,headersMs:Math.round(performance.now()-started),
+        setCookie:response.headers.has('set-cookie'),
+        responseType:type==='text/event-stream'?'SSE':type==='application/json'?'JSON':type==='text/html'?'HTML':'Other'});
+      if(check&&(!response.ok||event.responseType==='HTML'||event.setCookie||event.unexpected))record();
+    }
+    return response;
+  }
+  return {get active(){return capture?.active===true;},start,stop,clear,snapshot,request};
+}

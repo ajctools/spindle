@@ -16,3 +16,10 @@ export function cloudEstimate(usage,input,output){
   if(!usage?.covered||!count(usage.inputTokens)||!count(usage.outputTokens)||![input,output].every(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=100000))return null;
   return (usage.inputTokens*input+usage.outputTokens*output)/1000000;
 }
+export function formatCloudCost(amount,locale){
+  if(amount===null)return '—';
+  const digits=amount<1?4:2;
+  const format=new Intl.NumberFormat(locale,{style:'currency',currency:'USD',minimumFractionDigits:digits,maximumFractionDigits:digits});
+  const minimum=0.0001;
+  return amount>0&&amount<minimum?'<'+format.format(minimum):format.format(amount);
+}

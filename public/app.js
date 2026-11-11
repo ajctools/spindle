@@ -4,6 +4,7 @@ import {guides,essentials,workflowTips,recovery,workflowWarnings} from './guidan
 import {chatDetails,chatMarkdown} from './chat-ui.mjs';
 import {meshPreviewHTML,installMeshPreviews} from './mesh-preview.mjs';
 import {startDevicePulse} from './activity.mjs';
+import {createRoughCut} from './rough-cut.mjs';
 import {loadChatOptions,saveChatOptions,withResponseLimit,ampleResponseTokens} from './chat-settings.mjs';
 // Source upgrades can reach a browser before its helper has been restarted.
 // Keep existing workspaces usable until the helper can serve the new module.
@@ -17,6 +18,9 @@ let state=null,page='workbench',task='chat',selectedModel='',currentJob=null,cha
 let filters={q:'',type:'all',status:'all'},polling=false,connectionInfo=null,sampleInput=null,exampleUndo=null;
 let chatStorage;try{chatStorage=window.localStorage;}catch{}
 let chatOptions=loadChatOptions(chatStorage);
+let warmingChatModel='';
+let promptDex=null;
+let meetingDesk=null;
 const icons={chat:'◈',image:'▧',asr:'≋',speech:'◖',music:'♫',video:'▷',ocr:'▤',mesh:'⬡',decision:'⑂',embed:'∷',rerank:'↕'};
 const descriptions={chat:'Think, write, code, and understand images.',image:'Generate an image or work from a reference.',asr:'Turn a recording into text.',speech:'Give your words a voice.',music:'Compose from a description and optional lyrics.',video:'Create a clip from a prompt or animate an image.',ocr:'Extract text and document layout from an image.',mesh:'Turn an image into a 3D shape.',decision:'Evaluate structured questions and route a request.',embed:'Turn text into vectors for retrieval.',rerank:'Sort candidate documents by relevance.'};
 async function api(url,body){
@@ -32,10 +36,13 @@ function fail(e){const tip=recovery(e.message);toast(tip.title);const slot=$('#a
 function bind(s,event,fn){const el=$(s);if(el)el.addEventListener(event,fn);}
 function fmtSize(n){return n?(n/1073741824).toFixed(1)+' GiB':'Size not reported';}
 function compatible(t,installed=false){return (state?.models || []).filter(m=>m.tasks.includes(t)&&(!installed||m.installed));}
-function modelOptions(t,id,all=false){const ms=compatible(t,!all);return '<option value="">Choose a model…</option>'+ms.map(m=>`<option value="${esc(m.id)}" ${id===m.id?'selected':''}>${esc(m.name)}${m.loaded?' · loaded':m.installed?' · downloaded':' · download needed'}</option>`).join('');}
+function modelLabel(model,status=model.loaded?'loaded':model.installed?'downloaded':'download needed'){return model.name+' · '+status;}
+function modelOptions(t,id,all=false){const ms=compatible(t,!all);return '<option value="">Choose a model…</option>'+ms.map(m=>`<option value="${esc(m.id)}" ${id===m.id?'selected':''}>${esc(modelLabel(m))}</option>`).join('');}
 function preferred(t){return compatible(t,true).find(m=>m.loaded)?.id || compatible(t,true)[0]?.id || '';}
+function preferredChatModel(){return compatible('chat',true).find(m=>m.id===state.defaultChatModel)?.id || preferred('chat');}
 function taskOptions(id){return Object.entries(state.tasks).map(([k,t])=>`<option value="${k}" ${id===k?'selected':''}>${esc(t.label)}</option>`).join('');}
 const studio=createStudio({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
+const roughCut=createRoughCut({api,escape:esc,modelOptions,preferred,readFile,poll,toast});
 const workshops=createWorkshops({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
 function heading(eyebrow,title,lead,actions=''){return `<div class="title-row"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="lead">${lead}</p></div><div class="actions">${actions}</div></div>`;}
 async function refresh(render=true){
@@ -49,16 +56,167 @@ async function refresh(render=true){
   finally{b.disabled=false;}
 }
 function show(){
+  if(page!=='meeting')meetingDesk?.leave();
   stopDashboard();
   closeNavigation();
   document.body.classList.toggle('creating',page==='workbench');
   window.dispatchEvent(new Event('spindle:workspace'));
   if(page==='connection'){connectionPage();return;}
+  if(page==='meeting'){
+    $('#breadcrumb').textContent='Meeting Desk';
+    document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
+    void openMeetingDesk();return;
+  }
+  if(page==='security'){
+    $('#breadcrumb').textContent='Security & Privacy';
+    document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
+    securityPage();return;
+  }
   if(!state){page='connection';connectionPage();return;}$('#breadcrumb').textContent=({dashboard:'Dashboard',workbench:'Chat & create',workflows:'Workflows',library:'Library & runs',models:'Models',device:'Device'})[page];
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
   ({dashboard:dashboardPage,workbench:workbench,workflows:workflowPage,library:libraryPage,models:modelsPage,device:devicePage})[page]();
 }
+async function openMeetingDesk(){
+  if(!meetingDesk){
+    try{
+      const {createMeetingDesk}=await import('./meeting-desk.mjs');
+      meetingDesk??=createMeetingDesk({
+        api,escape:esc,getRuns:()=>runs,modelOptions,preferred,
+        onQueued:run=>{runs=[run,...runs.filter(item=>item.id!==run.id)];void poll();},
+      });
+    }catch{
+      if(page==='meeting')$('#view').innerHTML='<p class="help">Restart the Spindle helper after active runs finish, then reload to open Meeting Desk.</p>';
+      return;
+    }
+  }
+  if(page==='meeting')meetingDesk.mount($('#view'));
+}
 function dashboardPage(){mountDashboard($('#view'),{api,getState:()=>state,navigate:next=>{page=next;show();},toast});}
+const traceNames={chat:'Tiiny inference',search:'Web search',forecast:'Weather forecast',check:'Device API check'};
+const traceProviders={'https://html.duckduckgo.com':'DuckDuckGo','https://api.search.brave.com':'Brave Search','https://forecast.weather.gov':'National Weather Service'};
+const traceCount=(n,singular,plural=singular+'s')=>n+' '+(n===1?singular:plural);
+function traceOverview(events){
+  const external=events.filter(event=>['search','forecast'].includes(event.kind));
+  const device=events.filter(event=>['chat','check'].includes(event.kind));
+  const plaintext=device.filter(event=>event.protocol==='http:');
+  const responses=events.filter(event=>event.outcome==='headers');
+  const inspected=responses.filter(event=>typeof event.setCookie==='boolean');
+  const cookies=inspected.filter(event=>event.setCookie);
+  const unexpected=events.filter(event=>event.unexpected);
+  const data=events=>[...new Set(events.flatMap(event=>event.sent))];
+  const providers=[...new Set(external.map(event=>traceProviders[event.origin]||event.origin))];
+  const externalData=data(external),usesPrompt=externalData.includes('Current prompt as query');
+  const cards=[
+    ['External data',usesPrompt?'Prompt used for search':external.length?'Data shared with providers':events.length?'No external requests observed':'Awaiting a trace',
+      external.length?providers.join(' · ')+'. '+externalData.join(', ')+'. '+(usesPrompt?'Use an explicit query or turn off web search to keep the prompt out of search.':'Requests are listed below.'):
+        'Web search can send the current prompt as a query. Weather lookups can share location.',external.length?'external':'quiet'],
+    ['Device encryption',plaintext.length?'Unencrypted HTTP':device.length?'HTTPS requested':'No device request observed',
+      plaintext.length?data(plaintext).join(', ')+'. Someone with access to the network path could read this traffic.':
+        device.length?'The captured device requests used HTTPS URLs.':'This check needs a captured request to your configured Tiiny.',plaintext.length?'warning':'quiet'],
+    ['Upstream cookies',cookies.length?traceCount(cookies.length,'response offered','responses offered')+' a cookie':inspected.length?'None observed':'No headers inspected',
+      inspected.length?traceCount(inspected.length,'response')+' checked for Set-Cookie. Spindle’s local session cookie is separate.':
+        'The trace can check for cookies when response headers arrive.',cookies.length?'warning':'quiet'],
+    ['Unexpected destinations',unexpected.length?traceCount(unexpected.length,'unexpected request'):events.length?'None observed':'Awaiting a trace',
+      unexpected.length?'A request targeted an origin outside the expected route. Inspect its destination below.':
+        'Checks the origins used by Spindle. Traffic initiated by the Tiiny is outside this view.',unexpected.length?'warning':'quiet'],
+  ];
+  return cards.map(([label,value,detail,tone])=>`<article class="trace-card trace-${tone}">
+    <h3>${esc(label)}</h3><p class="trace-card-value">${esc(value)}</p><p>${esc(detail)}</p>
+  </article>`).join('');
+}
+function traceTimeline(events,active){
+  if(!events.length)return '<p class="trace-empty">'+(active?'Send a chat, then return here and refresh the trace.':'Start a trace before sending a chat to see its requests here.')+'</p>';
+  return `<ol class="trace-list">${[...events].sort((a,b)=>a.at-b.at).map(event=>{
+    const hasHeaders=event.outcome==='headers';
+    const format=event.responseType==='SSE'?'Model stream':event.responseType==='HTML'&&event.kind==='search'?'Search results page':event.responseType;
+    const apiHTML=event.responseType==='HTML'&&['chat','check'].includes(event.kind);
+    const result=hasHeaders?`HTTP ${event.status} · ${format} · headers in ${event.headersMs} ms`
+      :event.outcome==='pending'?(active?'Waiting for response headers':'No response headers captured')
+      :({aborted:'Request canceled',timeout:'Request timed out'})[event.outcome]||'Request failed before response headers';
+    const external=['search','forecast'].includes(event.kind);
+    const transport=event.protocol==='http:'?'Plaintext HTTP':'HTTPS';
+    const tags=[
+      event.unexpected?'Unexpected origin':'',
+      apiHTML?'Web page returned by API':'',
+      hasHeaders&&event.setCookie?'Set-Cookie offered':'',
+    ].filter(Boolean);
+    return `<li class="trace-hop">
+      <span class="trace-hop-marker ${external?'external':''}" aria-hidden="true"></span>
+      <div class="trace-hop-content">
+        <div class="trace-hop-heading"><h3>${esc(traceNames[event.kind]||'Request')}</h3>
+          <span class="pill ${event.protocol==='http:'?'warn':''}">${transport}</span></div>
+        <p class="trace-destination"><span>${external?'External provider':'Device endpoint'}</span> ${esc(event.origin)}</p>
+        <ul class="trace-data" aria-label="Request data">${event.sent.map(value=>`<li>${esc(value)}</li>`).join('')}</ul>
+        <div class="trace-hop-result">${esc(result)}${tags.map(tag=>` <span class="pill warn">${esc(tag)}</span>`).join('')}</div>
+      </div><div class="trace-hop-time"><time datetime="${new Date(event.at).toISOString()}">${esc(new Date(event.at).toLocaleTimeString())}</time>
+        ${event.runId?'<br>Run '+esc(event.runId.slice(0,8)):''}</div>
+    </li>`;
+  }).join('')}</ol>`;
+}
+function securityPage(){
+  const endpoint='/api/security/chat-trace';
+  $('#view').innerHTML=`<div class="security-workspace">
+    <header class="trace-header"><div><h1>Security &amp; Privacy</h1>
+      <p class="lead">See where your chat data went and what each service returned.</p></div>
+      <span class="pill trace-status" id="trace-status" role="status">Checking trace…</span></header>
+    <div class="panel trace-toolbar"><div class="actions">
+      <button class="button primary" type="button" id="trace-toggle" disabled>Start trace</button>
+      <button class="button" type="button" id="trace-refresh">Refresh trace</button>
+      <button class="button quiet" type="button" id="trace-clear" disabled>Clear</button>
+      <a class="button quiet" id="trace-download" href="${endpoint}?export=1" download hidden>Download full trace (redacted)</a>
+    </div><p>Captures up to 100 requests in memory and stops after five minutes.</p>
+    <p class="error" id="trace-error" role="alert"></p></div>
+    <section class="trace-cards" id="trace-overview" aria-label="Privacy findings"></section>
+    <section class="panel trace-evidence" aria-labelledby="trace-evidence-title">
+      <div class="panel-head"><div><h2 id="trace-evidence-title">Request timeline</h2><p id="trace-count" class="muted"></p></div>
+        <label class="trace-filter" id="trace-filter" hidden><span>Show</span><select id="trace-scope"></select></label></div>
+      <div id="trace-entries"></div>
+    </section>
+    <details class="trace-coverage"><summary>What this trace can see</summary>
+      <p>Spindle captures metadata from chat, search, forecasts, and failed model API checks. The trace omits message text, query text, credential values, and response bodies. The JSON download also omits device addresses.</p>
+      <p>A Set-Cookie header is an offer from an upstream server. This check does not determine whether a link contains tracking or whether the device connects to other services.</p>
+      <p>Spindle still saves run history locally. Remembering a Tiiny connection stores its key in plaintext on this computer.</p>
+    </details></div>`;
+  const status=$('#trace-status'),toggle=$('#trace-toggle'),clear=$('#trace-clear'),refreshButton=$('#trace-refresh');
+  const download=$('#trace-download'),error=$('#trace-error'),entries=$('#trace-entries');
+  const overview=$('#trace-overview'),scope=$('#trace-scope'),filter=$('#trace-filter'),count=$('#trace-count');
+  let trace=null;
+  const time=at=>new Date(at).toLocaleTimeString();
+  function render(){
+    const all=trace.events,chosen=scope.value;
+    const selected=chosen==='device-checks'?all.filter(e=>!e.runId):chosen?all.filter(e=>e.runId===chosen):all;
+    count.textContent=traceCount(selected.length,'captured request')+(trace.dropped?' · '+traceCount(trace.dropped,'older request')+' dropped':'');
+    overview.innerHTML=traceOverview(selected);
+    entries.innerHTML=traceTimeline(selected,trace.active);
+  }
+  async function update(action){
+    toggle.disabled=clear.disabled=refreshButton.disabled=true;
+    error.textContent='';
+    try{
+      trace=await api(endpoint,action?{action}:undefined);
+      const {active,endsAt,events}=trace;
+      status.textContent=active?'Recording until '+time(endsAt):events.length?'Recording stopped':'Trace off';
+      status.classList.toggle('live',active);
+      toggle.textContent=active?'Stop trace':events.length?'Start new trace':'Start trace';
+      download.hidden=!events.length;
+      const chosen=scope.value;
+      const runIds=[...new Set([...events].reverse().map(e=>e.runId).filter(Boolean))];
+      const checks=events.some(e=>!e.runId);
+      scope.replaceChildren(new Option('All captured requests',''),
+        ...runIds.map(id=>new Option('Run '+id.slice(0,8),id)),
+        ...(checks?[new Option('Device API checks','device-checks')]:[]));
+      if(runIds.includes(chosen)||checks&&chosen==='device-checks')scope.value=chosen;
+      filter.hidden=runIds.length+Number(checks)<2;
+      render();
+    }catch(e){error.textContent=e.message;status.textContent='Trace unavailable';}
+    finally{refreshButton.disabled=false;toggle.disabled=!trace;clear.disabled=!trace?.startedAt;}
+  }
+  toggle.onclick=()=>void update(trace?.active?'stop':'start');
+  clear.onclick=()=>void update('clear');
+  refreshButton.onclick=()=>void update();
+  scope.onchange=render;
+  void update();
+}
 function fileField(label='Reference image',accept='image/*'){return `<label class="field"><span>${label}</span><input id="input-file" type="file" accept="${accept}"></label>`;}
 function extraFields(){
   if(task==='image')return fileField('Reference image · optional')+'<p class="help">Reference-image support varies by model. Inspect runtime defaults before choosing settings.</p>';
@@ -73,53 +231,90 @@ function extraFields(){
   return '';
 }
 function workbench(){
-  if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=preferred(task);
+  if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=task==='chat'?preferredChatModel():preferred(task);
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
   const titles={chat:'What’s on your mind?',image:'Picture something new.',asr:'Make every word useful.',speech:'Give your words a voice.',music:'Find your next sound.',video:'Set your ideas in motion.',ocr:'A clearer view of your documents.',mesh:'Give an image a new dimension.',decision:'Find the right direction.',embed:'Find meaning in your text.',rerank:'Bring the best match forward.'};
   const action=isChat?'Send':({image:'Create image',asr:'Transcribe',speech:'Create speech',music:'Create music',video:'Create video',ocr:'Read document',mesh:'Create 3D object',decision:'Evaluate',embed:'Create embeddings',rerank:'Rank documents'})[task];
   $('#view').innerHTML=`<section class="creation-workspace" aria-label="${esc(label)} workspace">
-    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
+    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
     <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,3).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
     <div id="chat-history" class="chat-history" role="log" aria-label="Conversation"></div>
     <section class="workspace-result" id="workspace-result" aria-label="Result" hidden><div class="result-status"><span id="output-status" role="status">Ready</span></div><div class="output-area" id="output" aria-live="polite"></div></section></div>
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
-    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}</div>
+    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label><span id="model-load-status" class="sr-only" role="status"></span>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}</div>
     ${!fileOnly?`<label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="2" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" required></textarea></label>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
-    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
-    ${isChat?'<p id="chat-search-notice" class="chat-search-notice" role="note"></p>':''}
+    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit">Send to Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
+    ${isChat?'<div class="chat-send-privacy"><p id="chat-search-notice" class="chat-search-notice" role="note"></p><p id="chat-device-notice" class="chat-search-notice"></p></div>':''}
     <details id="${isChat?'chat':'creation'}-options" class="chat-options"><summary><span>${isChat?'Chat':esc(label)} options</span><span class="small muted">${isChat?'Search, thinking & more':'Fine-tune your result'}</span></summary><div class="chat-options-body"><div class="model-note" id="model-note"></div><button class="text-button model-help" type="button" data-guide="essentials">About this model →</button>
+    ${isChat?`<label class="field"><span>Default chat model</span><select id="default-chat-model"><option value="">No default</option>${compatible('chat',true).map(m=>`<option value="${esc(m.id)}" ${m.id===state.defaultChatModel?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label><p class="help" id="default-chat-status" role="status">Loads when Chat opens on an idle, empty device.</p>`:''}
     ${isChat||!fileOnly&&task!=='rerank'?extraFields():''}
     <details><summary>Advanced settings</summary><p class="help">Optional. Leave {} for model defaults. Add settings only when the selected model supports them.</p><textarea id="params" aria-label="Advanced JSON parameters">${task==='decision'?JSON.stringify({questions:{route:{type:'choice',instructions:'Which team should handle this?',criteria:{general:null,technical:null,billing:null}}}},null,2):'{}'}</textarea></details>
     <p class="help privacy-inline">Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.</p><label class="checkline"><input id="auto-model" type="checkbox" checked> Switch models if needed, then restore my loaded models.</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
     </div></details></form></section>`;
   $('#breadcrumb').textContent='Chat & create';
-  bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=preferred(task);currentJob=null;workbench();});
+  bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=task==='chat'?preferredChatModel():preferred(task);currentJob=null;workbench();});
   bind('#prompt','input',resizePrompt);
   bind('#attach-image','click',()=>$('#input-file').click());
   renderSampleStatus();
-  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chat=[];currentJob=null;$('#workspace-result').hidden=true;$('#output').innerHTML='';$('#run-task').disabled=false;}renderChat();modelNote();});modelNote();renderChat();
+  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chat=[];currentJob=null;$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
   if(task==='chat')bindChatControls();
-  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;workbench();});
+  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;selectedModel=preferredChatModel();workbench();});
   bind('#task-form','submit',async e=>{
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
+    const tiinyOnly=e.submitter?.id==='send-tiiny-only';
     const input=form.querySelector('#prompt')?.value || '',messages=task==='chat'?chat.map(({role,content})=>({role,content})):[],switchModels=form.querySelector('#auto-model').checked;
-    button.disabled=true;
+    disableSend(form,true);
     try{
-      const s=await getStep(),chatStep=s.task==='chat';
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels});
+      const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,...(tiinyOnly?{tiinyOnly:true}:{})});
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
-      if(s.task==='chat'){chat.push({role:'user',content:input});$('#prompt').value='';resizePrompt();}
+      if(s.task==='chat'){chat.push({role:'user',content:input});$('#prompt').value='';resizePrompt();chatOptionsStatus();}
       if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();scrollConversation();poll();
-    }catch(e){button.disabled=false;if(form===$('#task-form'))fail(e);else toast(e.message);}
+    }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
   });
   bind('#check-model','click',async()=>{try{if(!selectedModel)throw new Error('Choose a downloaded model.');const j=await api('/api/check',{task,model:selectedModel,switchModels:$('#auto-model').checked});currentJob=j.id;toast('A sample check is queued. Its result will be recorded in Device readiness.');poll();}catch(e){fail(e);}});
   bind('#add-workflow','click',async()=>{try{const s=await getStep(false);workflow.steps.push({...s,file:undefined,fileFrom:['asr','ocr','mesh'].includes(task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast('Added a '+state.tasks[task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
   if(task==='video'){const preview=()=>{for(const id of ['seconds','size']){const e=$('#'+id);if(e)e.disabled=$('#video-preview').checked;}};bind('#video-preview','change',preview);preview();}
   bind('#runtime','click',async()=>{try{const j=await api('/api/runtime?task='+task+'&model='+encodeURIComponent(selectedModel));$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output').innerHTML='<div class="output-meta">RUNTIME DEFAULTS · READ FROM DEVICE</div><pre>'+esc(JSON.stringify(j,null,2))+'</pre>';$('#output-status').textContent='Runtime info';}catch(e){fail(e);}});
   if(currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}
+  if(isChat)void warmDefaultChat();
+}
+function disableSend(form,disabled){form?.querySelectorAll('button[type="submit"]').forEach(button=>{button.disabled=disabled;});}
+async function warmDefaultChat(){
+  const id=state.defaultChatModel;
+  if(!id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
+  warmingChatModel=id;
+  renderModelLoad();
+  const status=$('#default-chat-status');
+  if(status)status.textContent='Loading the default chat model…';
+  try{
+    const result=await api('/api/chat/default/load',{});
+    if(result.status==='ready')await refresh(false);
+    if(status)status.textContent=result.status==='ready'?'Default chat model loaded.':'Loads when Chat opens on an idle, empty device.';
+  }catch(e){if(status)status.textContent='Default model could not preload. '+e.message;}
+  finally{warmingChatModel='';if(page==='workbench'&&task==='chat')renderModelLoad();}
+}
+function renderModelLoad(){
+  const picker=$('#model');
+  if(!picker)return;
+  const load=runs.find(run=>run.status==='running'&&run.modelLoad)?.modelLoad || (warmingChatModel?{id:warmingChatModel,ready:false}:null);
+  const models=new Map(compatible(task,true).map(model=>[model.id,model]));
+  for(const option of picker.options){
+    const model=models.get(option.value);
+    if(!model)continue;
+    const status=load?.id===model.id?(load.ready?'loaded':'loading…'):undefined;
+    const label=modelLabel(model,status);
+    if(option.textContent!==label)option.textContent=label;
+  }
+  const model=models.get(picker.value);
+  const selectedLoad=model&&load?.id===model.id?load:null;
+  $('.composer-model-progress').hidden=!selectedLoad||selectedLoad.ready;
+  const status=$('#model-load-status');
+  const announcement=selectedLoad?(selectedLoad.ready?model.name+' loaded.':'Loading '+model.name+'…'):'';
+  if(status.textContent!==announcement)status.textContent=announcement;
 }
 function modelNote(){const m=state.models.find(m=>m.id===selectedModel);$('#model-note').innerHTML=m?`${m.loaded?'<span class="pill live">Loaded</span>':'<span class="pill warn">Will load for this run</span>'} &nbsp; ${esc(m.npu??'?')}% NPU · ${fmtSize(m.size)}${m.thinking?.supported?' · reasoning supported':''}`:'No compatible downloaded model. Explore Models to download one.';if(task==='chat'){thinkingControls();chatOptionsStatus();}}
 function thinkingControls(){
@@ -134,16 +329,37 @@ function thinkingControls(){
 function chatOptionsStatus(){
   const model=state.models.find(m=>m.id===selectedModel),budget=chatOptions.responseLimit==='ample'?ampleResponseTokens(model).toLocaleString():chatOptions.responseLimit==='default'?'runtime default':Number(chatOptions.responseLimit==='custom'?chatOptions.customTokens:chatOptions.responseLimit).toLocaleString();
   if($('#chat-quick-status'))$('#chat-quick-status').textContent=(chatOptions.search?'◎ Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
-  if($('#chat-search-notice')){$('#chat-search-notice').classList.toggle('search-enabled',chatOptions.search);$('#chat-search-notice').textContent=chatOptions.search?'External search: your prompt or query goes to '+(chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo')+' over HTTPS. U.S. weather locations may go to the National Weather Service. Queries and results save locally.':'Search is off. Prompts and outputs save locally.';}
+  const searchNotice=$('#chat-search-notice'),deviceNotice=$('#chat-device-notice'),localSend=$('#send-tiiny-only');
+  if(!searchNotice)return;
+  localSend.hidden=!chatOptions.search;
+  const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
+  searchNotice.classList.toggle('search-enabled',chatOptions.search);
+  searchNotice.textContent=chatOptions.search?`With Send, ${provider} gets ${chatOptions.query.trim()?'your separate search query':'this prompt as a search query'} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'Web search is off for this send.';
+  const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),'the Tiiny API key'];
+  const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
+  deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search?'Search results go to Tiiny when used. ':''}Runs save locally.`;
 }
 function rememberChatOptions(){if(!saveChatOptions(chatStorage,chatOptions))toast('Browser storage is unavailable. These settings apply until this page closes.');chatOptionsStatus();}
 function bindChatControls(){
+  bind('#default-chat-model','change',async e=>{
+    const select=e.currentTarget,model=select.value,status=$('#default-chat-status');
+    select.disabled=true;
+    try{
+      await api('/api/chat/default',{model});state.defaultChatModel=model;
+      if(page==='workbench'&&task==='chat'&&select===$('#default-chat-model')&&model&&!chat.length&&!currentJob){
+        selectedModel=model;$('#model').value=model;modelNote();renderModelLoad();
+      }
+      status.textContent=model?'Default model saved.':'Default model cleared.';
+      if(model&&page==='workbench'&&task==='chat')void warmDefaultChat();
+    }catch(e){select.value=state.defaultChatModel||'';status.textContent=e.message;}
+    finally{select.disabled=false;}
+  });
   bind('#response-limit','change',e=>{chatOptions.responseLimit=e.target.value;$('#custom-token-field').hidden=e.target.value!=='custom';$('#custom-tokens').disabled=e.target.value!=='custom';rememberChatOptions();});
   bind('#custom-tokens','input',e=>{chatOptions.customTokens=e.target.value;rememberChatOptions();});
   bind('#thinking-mode','change',e=>chatOptions.thinking=e.target.value);bind('#reasoning-effort','change',e=>chatOptions.effort=e.target.value);
   bind('#stream-chat','change',e=>{chatOptions.stream=e.target.checked;rememberChatOptions();});
   bind('#web-search','change',e=>{chatOptions.search=e.target.checked;$('#web-options').hidden=!e.target.checked;rememberChatOptions();});
-  bind('#search-provider','change',e=>{chatOptions.provider=e.target.value;rememberChatOptions();});bind('#web-query','input',e=>chatOptions.query=e.target.value);
+  bind('#search-provider','change',e=>{chatOptions.provider=e.target.value;rememberChatOptions();});bind('#web-query','input',e=>{chatOptions.query=e.target.value;chatOptionsStatus();});
   const keyStatus=j=>{const target=$('#search-key-status');if(target)target.textContent=j.braveKeyPresent?'Brave key is available in server memory. Restarting the helper clears it.':'No Brave key configured. DuckDuckGo needs no key.';};
   chatOptionsStatus();
   api('/api/search/settings').then(keyStatus).catch(fail);
@@ -154,7 +370,7 @@ function resizePrompt(){const prompt=$('#prompt');if(prompt){prompt.style.height
 function scrollConversation(){const el=$('#conversation');if(el)el.scrollTop=el.scrollHeight;}
 function renderChat(){const h=$('#chat-history');if(!h)return;h.innerHTML=task==='chat'?chat.map(m=>`<article class="chat-message ${m.role==='user'?'from-user':'from-assistant'}"><strong>${m.role==='user'?'You':'Spindle'}</strong>${m.role==='assistant'?chatDetails(m,'thinking'):''}${m.role==='assistant'?chatMarkdown(m.content):'<div class="output-text">'+esc(typeof m.content==='string'?m.content:'[Image message]')+'</div>'}${m.role==='assistant'?chatDetails(m,'sources'):''}</article>`).join(''):'';if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;}
 async function readFile(input,forTask=task){const f=input?.files?.[0];if(!f)return null;if(f.size>40*1024*1024)throw new Error('Files must be under 40 MiB.');if(forTask==='asr')return transcriptionFile(f);return {name:f.name,data:await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(f);})};}
-async function getStep(requireFile=true){
+async function getStep(requireFile=true,tiinyOnly=false){
   const stepTask=task,model=selectedModel,fileInput=$('#input-file'),sample=sampleInput?.task===stepTask?sampleInput.file:null;
   if(!model)throw new Error('Choose a downloaded model first.');let params;try{params=JSON.parse($('#params')?.value || '{}');}catch{throw new Error('Advanced settings must be valid JSON.');}
   if(!params||Array.isArray(params)||typeof params!=='object')throw new Error('Advanced settings need a JSON object.');
@@ -164,7 +380,7 @@ async function getStep(requireFile=true){
   if(stepTask==='chat'){
     params=withResponseLimit(params,chatOptions.responseLimit,chatOptions.customTokens,state.models.find(m=>m.id===model));
     params._spindleThinking=chatOptions.thinking;params._spindleEffort=chatOptions.effort;params._spindleStream=chatOptions.stream;
-    params._spindleWebSearch={enabled:chatOptions.search,provider:chatOptions.provider,query:chatOptions.query};
+    params._spindleWebSearch=tiinyOnly?{enabled:false}:{enabled:chatOptions.search,provider:chatOptions.provider,query:chatOptions.query};
   }
   const documents=$('#documents')?.value.split('\n').filter(Boolean),file=sample || await readFile(fileInput,stepTask);
   if(requireFile&&['asr','ocr','mesh'].includes(stepTask)&&!file)throw new Error('Choose an input file.');
@@ -177,7 +393,10 @@ function structuredOutput(out){
   if(out.task==='rerank'&&j?.results){return `<div class="result-title">The most relevant, first.</div>${j.results.map((r,i)=>`<div class="ranked-result"><span class="rank-number">${i+1}</span><div><p>${esc(r.document?.text || r.text || out.documents?.[r.index] || 'Candidate '+(r.index+1))}</p><span class="small muted">Relevance ${Number(r.relevance_score ?? r.score ?? 0).toFixed(4)}</span></div></div>`).join('')}`;}
   return null;
 }
-function outputHTML(out,{partial=false}={}){
+function libraryOutput(out){
+  return outputHTML(out)+(out.assets||[]).map((a,i)=>`<button type="button" class="button quiet library-delete" data-delete-asset="${esc(a.url)}">Delete ${esc(a.mime.startsWith('image/')?'image':a.mime.startsWith('audio/')?'audio':a.mime.startsWith('video/')?'video':'artifact')}${out.assets.length>1?' '+(i+1):''}</button>`).join('');
+}
+function outputHTML(out,{partial=false}={}) {
   if(out.authorKind){const label=({plan:'Application design',code:'Complete application source',continue:'Continued native application source',part:'Application source section',audit:'Application code review',repair:'Repaired application source',review:'Visual review'})[out.authorKind] || 'Application author';return '<div class="output-block author-output"><div class="output-meta">TIINY · '+label+'</div><p class="help">'+(out.text?.length || 0).toLocaleString()+' characters returned by the local model. Source is saved with the run.</p><details><summary>Inspect the Tiiny response</summary><pre>'+esc(out.text || out.reasoning || '')+'</pre></details></div>';}
   const structured=structuredOutput(out);
   const museum=out.assets?.find(a=>a.mime==='text/html');
@@ -186,7 +405,7 @@ function outputHTML(out,{partial=false}={}){
 }
 let handled=new Set();
 function renderCurrent(j){
-  if(!$('#output'))return;const runButton=$('#run-task');if(runButton)runButton.disabled=['queued','running'].includes(j.status);$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
+  if(!$('#output'))return;disableSend($('#task-form'),['queued','running'].includes(j.status));$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
   let completedAnswer=false;const conversation=$('#conversation'),follow=conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
   $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.status==='completed';
   const thinkingOpen=[...$('#output').querySelectorAll('[data-chat-panel]')].map(el=>el.open);$('#output').innerHTML=j.outputs.map(out=>outputHTML(out)).join('')+(j.partial?outputHTML(j.partial,{partial:true}):'')+(j.error?recoveryHTML(j.error):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
@@ -194,7 +413,7 @@ function renderCurrent(j){
   bind('#stop-current','click',()=>api('/api/cancel/'+j.id,{}).then(()=>toast('Stop requested.')).catch(fail));
   if(j.status==='completed'){
     const out=j.outputs.at(-1);
-    if(!handled.has(j.id)){handled.add(j.id);completedAnswer=true;if(out?.task==='chat'){chat.push({role:'assistant',content:out.text,reasoning:out.reasoning,webSearch:out.webSearch,finishReason:out.finishReason,responseLimit:out.responseLimit});renderChat();completedAnswer=true;}}
+    if(!handled.has(j.id)){handled.add(j.id);completedAnswer=true;if(out?.task==='chat'){chat.push({role:'assistant',content:out.text,reasoning:out.reasoning,webSearch:out.webSearch,finishReason:out.finishReason,responseLimit:out.responseLimit});renderChat();chatOptionsStatus();completedAnswer=true;}}
     if(out?.assets?.some(a=>a.mime.startsWith('image/'))){const btn=document.createElement('button');btn.className='button';btn.textContent='Animate this image →';btn.onclick=()=>makeImageVideo(j);$('#output').append(btn);}
   }
   if(follow){if(completedAnswer)(task==='chat'?$('#chat-history').lastElementChild:$('#workspace-result'))?.scrollIntoView({block:'start'});else scrollConversation();}
@@ -203,7 +422,10 @@ function makeImageVideo(j){
   const image=j.outputs.filter(o=>o.task==='image').flatMap(o=>o.assets || []).find(a=>a.mime.startsWith('image/'));
   if(!image)return;studio.adopt(image);page='workflows';show();$('#creative-workflow').open=true;toast('Your saved image is selected. Refine it or make a video.');
 }
-async function poll(){if(polling)return;polling=true;try{const next=await api('/api/runs');const changed=JSON.stringify(next)!==JSON.stringify(runs);const ended=runs.some(r=>r.status==='running')&&!next.some(r=>r.status==='running');runs=next;const busy=runs.find(r=>r.status==='running'||r.status==='queued');if($('#activity-status'))$('#activity-status').textContent=busy?busy.name+' · '+(busy.phase || busy.status):'';if(busy?.phase)$('#resident').textContent=busy.phase;window.dispatchEvent(new CustomEvent('spindle:activity',{detail:!!busy}));window.dispatchEvent(new CustomEvent('spindle:run',{detail:busy?{name:busy.name,status:busy.status,phase:busy.phase,progress:busy.progress}:null}));if(ended)await refresh(false);if(changed){if(page==='dashboard')refreshDashboard();if(page==='workbench'&&currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}if(page==='library')renderRuns();if(page==='workflows')renderWorkflowStatus();}}catch(e){console.warn(e.message);}finally{polling=false;}}
+async function poll(){if(polling)return;polling=true;try{const next=await api('/api/runs');const changed=JSON.stringify(next)!==JSON.stringify(runs);const ended=runs.some(r=>r.status==='running')&&!next.some(r=>r.status==='running');runs=next;const busy=runs.find(r=>r.status==='running'||r.status==='queued');if($('#activity-status'))$('#activity-status').textContent=busy?busy.name+' · '+(busy.phase || busy.status):'';if(busy?.phase)$('#resident').textContent=busy.phase;window.dispatchEvent(new CustomEvent('spindle:activity',{detail:!!busy}));window.dispatchEvent(new CustomEvent('spindle:run',{detail:busy?{name:busy.name,status:busy.status,phase:busy.phase,progress:busy.progress}:null}));
+  if(changed&&page==='workbench')renderModelLoad();
+  if(ended){await refresh(false);if(page==='workbench')renderModelLoad();}
+  if(changed){promptDex?.update();if(page==='meeting')meetingDesk?.update();if(page==='dashboard')refreshDashboard();if(page==='workbench'&&currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}if(page==='library')renderRuns();if(page==='workflows')renderWorkflowStatus();}}catch(e){console.warn(e.message);}finally{polling=false;}}
 function modelsPage(){
   const ms=state.models,installed=ms.filter(m=>m.installed),store=ms.filter(m=>m.available);
   $('#view').innerHTML=heading('YOUR MODEL COLLECTION','Many minds. One shelf.','A live catalog from your device, with availability, inputs, outputs, and NPU requirements.',`<a class="button" href="/catalog.csv" download>Export CSV ↗</a><a class="button quiet" href="/catalog.json" download>JSON</a>`)+
@@ -244,7 +466,7 @@ function workflowPage(){
   bind('#save-workflow','click',async()=>{try{syncSteps();const w=await api('/api/workflows',workflow);workflow.id=w.id;toast('Recipe saved on this computer.');loadSaved();}catch(e){fail(e);}});
   bind('#run-workflow','click',async()=>{try{syncSteps();if(!workflow.steps.length)throw new Error('Add at least one step.');const issues=workflowWarnings(workflow.steps,state.tasks);if(issues.length)throw new Error('Step '+(issues[0].step+1)+': '+issues[0].text);if(workflow.steps.some(s=>s.fileFrom==='input')&&!$('#input-file').files.length)throw new Error('Choose a starting file before running this workflow.');const missing=workflow.steps.filter(s=>!state.models.find(m=>m.id===s.model)?.loaded);if(missing.length&&!$('#switch-models').checked)throw new Error('Load the required models, or enable model switching: '+[...new Set(missing.map(s=>s.model||'(choose a model)'))].join(', '));
     const j=await api('/api/run',{name:workflow.name,input:$('#workflow-input').value,file:await readFile($('#input-file'),workflow.steps[0]?.task),steps:workflow.steps,switchModels:$('#switch-models').checked});currentJob=j.id;toast('Workflow queued. Results will be saved in Library & runs.');poll();}catch(e){fail(e);}});
-  const workshopRoot=document.createElement('div');workshopRoot.id='extra-workshops';$('#creative-workflow').after(workshopRoot);workshops.mount(workshopRoot,runs);studio.mount($('#creative-studio'),runs);renderSteps();loadSaved();renderWorkflowStatus();
+  const workshopRoot=document.createElement('div');workshopRoot.id='extra-workshops';$('#creative-workflow').after(workshopRoot);workshops.mount(workshopRoot,runs);const cutRoot=document.createElement('div');$('#creative-workflow').after(cutRoot);roughCut.mount(cutRoot,runs);studio.mount($('#creative-studio'),runs);renderSteps();loadSaved();renderWorkflowStatus();
 }
 function renderSteps(){
   $('#steps').innerHTML=workflow.steps.map((s,i)=>`<section class="panel step" data-index="${i}"><div class="step-title"><h3><span class="step-number">${i+1}</span>${esc(state.tasks[s.task].label)} <span class="small muted">→ ${state.tasks[s.task].output}</span></h3><div class="step-tools"><button data-move="${i}:up" aria-label="Move step up">↑</button><button data-move="${i}:down" aria-label="Move step down">↓</button><button data-remove="${i}" aria-label="Remove step">×</button></div></div><div class="field-row"><label class="field"><span>Task</span><select data-step-task="${i}">${taskOptions(s.task)}</select></label><label class="field"><span>Model</span><select data-step-model="${i}">${modelOptions(s.task,s.model)}</select></label></div><label class="field"><span>Instruction / text input</span><textarea data-step-prompt="${i}">${esc(s.prompt)}</textarea></label><div class="template-line">{{input}} = starting text &nbsp; {{previous.text}} = previous result</div><label class="field"><span>File input</span><select data-step-file="${i}">${[['none','No file'],['input','Starting file'],['previous','Previous step’s image or audio']].map(([k,v])=>`<option value="${k}" ${s.fileFrom===k?'selected':''}>${v}</option>`).join('')}</select></label><p class="help step-context">${esc(guides[s.task].output)}</p><details><summary>Step parameters · JSON</summary><textarea data-step-params="${i}">${esc(JSON.stringify(s.params || {},null,2))}</textarea></details></section>`).join('')||'<div class="empty-inline">Choose a recipe or add your first step.</div>';
@@ -257,7 +479,7 @@ function renderSteps(){
 function syncSteps(){workflow.name=$('#workflow-name').value;for(let i=0;i<workflow.steps.length;i++){const s=workflow.steps[i];s.model=$(`[data-step-model="${i}"]`).value;s.prompt=$(`[data-step-prompt="${i}"]`).value;s.fileFrom=$(`[data-step-file="${i}"]`).value;try{s.params=JSON.parse($(`[data-step-params="${i}"]`).value);}catch{throw new Error('Step '+(i+1)+' has invalid JSON parameters.');}}}
 function preflight(){const target=$('#workflow-preflight');if(!target)return;const ids=[...new Set(workflow.steps.map(s=>s.model))];const models=ids.map(id=>state.models.find(m=>m.id===id));const cost=models.reduce((sum,m)=>sum+(m?.npu || 0),0);const warnings=workflowWarnings(workflow.steps,state.tasks);target.innerHTML=workflow.steps.length?`<p class="help">${workflow.steps.length} steps · ${ids.length} distinct models · ${cost}% estimated NPU reservation if resident together</p>${cost>100?'<p class="help error">These models exceed NPU capacity together. Enable model switching to run them one at a time.</p>':''}<div class="step-status">${models.map(m=>`<span class="pill ${m?.loaded?'live':'warn'}">${esc(m?.name || 'Choose a model')}: ${m?.loaded?'ready':'load needed'}</span>`).join('')}</div>${warnings.length?`<div class="workflow-warnings"><strong>Before you run</strong>${warnings.map(w=>`<p>Step ${w.step+1}: ${esc(w.text)}</p>`).join('')}</div>`:''}`:'';}
 async function loadSaved(){try{saved=await api('/api/workflows');if(!$('#saved-recipes'))return;$('#saved-recipes').innerHTML=saved.map(w=>`<button class="recipe" data-saved="${esc(w.id)}"><strong>${esc(w.name)}</strong><small>${w.steps.length} steps</small></button>`).join('')||'<p class="help">Your saved recipes live here.</p>';document.querySelectorAll('[data-saved]').forEach(b=>b.onclick=()=>{workflow=structuredClone(saved.find(w=>w.id===b.dataset.saved));workflowPage();$('#workflow-builder').open=true;});}catch(e){fail(e);}}
-function renderWorkflowStatus(){studio.update(runs);workshops.update(runs);const el=$('#workflow-status');const j=runs.find(j=>j.id===currentJob);if(el&&j)el.innerHTML=`${esc(j.name)} · ${esc(j.phase || j.status)} · step ${(j.currentStep || 0)+1} of ${j.steps.length}${j.error?'<p class="error">'+esc(j.error)+'</p>':''}`;}
+function renderWorkflowStatus(){studio.update(runs);workshops.update(runs);roughCut.update(runs);const el=$('#workflow-status');const j=runs.find(j=>j.id===currentJob);if(el&&j)el.innerHTML=`${esc(j.name)} · ${esc(j.phase || j.status)} · step ${(j.currentStep || 0)+1} of ${j.steps.length}${j.error?'<p class="error">'+esc(j.error)+'</p>':''}`;}
 function libraryPage(){ $('#view').innerHTML=heading('YOUR LOCAL LIBRARY','Keep what you make.','Every run keeps its model, inputs, parameters, and outputs on this computer.')+'<div id="runs"></div>';renderRuns();poll(); }
 const runSignatures=new Map();
 function renderRuns(){
@@ -270,11 +492,12 @@ function renderRuns(){
     const sig=JSON.stringify([j.outputs,j.finalOutput,j.error,j.restoreError,j.persistenceError]);
     if(!card){card=document.createElement('article');card.className='panel run-card';card.dataset.runId=j.id;}
     if(runSignatures.get(j.id)!==sig||!card.children.length){
-      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${j.finalOutput?outputHTML(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${j.outputs.map(out=>outputHTML(out)).join('')}</details>`:j.outputs.map(out=>outputHTML(out)).join('')}${j.error?recoveryHTML(j.error):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary><pre>${esc(JSON.stringify({input:j.input,steps:j.steps},null,2))}</pre></details></div>`;
+      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${j.finalOutput?libraryOutput(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${j.outputs.map(libraryOutput).join('')}</details>`:j.outputs.map(libraryOutput).join('')}${j.error?recoveryHTML(j.error):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary><pre>${esc(JSON.stringify({input:j.input,steps:j.steps},null,2))}</pre></details></div>`;
       runSignatures.set(j.id,sig);
     }
-    card.querySelector('.run-actions').innerHTML=`<span class="pill ${j.status==='completed'?'live':''}">${esc(j.status==='running'?j.phase || j.status:j.status)}${j.progress!=null?' · '+j.progress+'%':''}</span>${['queued','running'].includes(j.status)?'<button class="button danger cancel-run">Stop run</button>':''}${j.status==='completed'&&j.outputs.some(o=>o.task==='image'&&o.assets?.some(a=>a.mime.startsWith('image/')))?'<button class="button use-image">Edit / animate image →</button>':''}${j.film&&['failed','cancelled','interrupted'].includes(j.status)?'<button class="button resume-film">Resume film →</button>':''}`;
+    card.querySelector('.run-actions').innerHTML=`<span class="pill ${j.status==='completed'?'live':''}">${esc(j.status==='running'?j.phase || j.status:j.status)}${j.progress!=null?' · '+j.progress+'%':''}</span>${['queued','running'].includes(j.status)?'<button class="button danger cancel-run">Stop run</button>':''}${j.status==='completed'&&j.outputs.some(o=>o.task==='image'&&o.assets?.some(a=>a.mime.startsWith('image/')))?'<button class="button use-image">Edit / animate image →</button>':''}${j.roughCut?.segments?'<button class="button review-cut">Review rough cut →</button>':''}${j.film&&['failed','cancelled','interrupted'].includes(j.status)?'<button class="button resume-film">Resume film →</button>':''}`;
     const stop=card.querySelector('.cancel-run');if(stop)stop.onclick=()=>api('/api/cancel/'+j.id,{}).then(poll).catch(fail);
+    const cut=card.querySelector('.review-cut');if(cut)cut.onclick=()=>{page='workflows';roughCut.open(j.id);show();roughCut.open(j.id);$('#rough-cut-workflow')?.scrollIntoView({block:'start'});};
     const use=card.querySelector('.use-image');if(use)use.onclick=()=>makeImageVideo(j);
     const resume=card.querySelector('.resume-film');if(resume)resume.onclick=async()=>{resume.disabled=true;try{const next=await api('/api/studio/resume',{id:j.id});currentJob=next.id;toast('Film resumed from saved segments.');await poll();}catch(e){fail(e);}finally{resume.disabled=false;}};
     if(target.children[index]!==card)target.insertBefore(card,target.children[index] || null);
@@ -283,6 +506,17 @@ function renderRuns(){
 function devicePage(){
   const models=state.models.filter(m=>m.loaded),n=state.npu;
   $('#view').innerHTML=heading('THE HEART OF YOUR UNIVERSE','Small footprint. Full control.','Live device telemetry, connection health, and real capability checks.')+`<div class="device-grid"><section class="panel"><div class="panel-head"><h2>Your Tiiny</h2><span class="pill live">${state.offline?'Offline':'Connected'}</span></div><div class="panel-body">${[['Loaded models',models.length],['NPU reserved',models.reduce((a,m)=>a+(m.npu || 0),0)+'%'],['NPU activity',n?.devices?.[0]?.util_percent==null?'Unavailable':n.devices[0].util_percent+'%'],['NPU memory',n?.devices?.[0]?Math.round(n.devices[0].mem_used_mb)+' / '+Math.round(n.devices[0].mem_total_mb)+' MB':'Unavailable'],['CPU activity',n?.cpu?.total_percent==null?'Unavailable':n.cpu.total_percent+'%'],['Memory',n?.memory?.usage_percent==null?'Unavailable':n.memory.usage_percent+'%']].map(([k,v])=>`<div class="metric-row"><span class="muted">${k}</span><span>${esc(v)}</span></div>`).join('')}<p class="help section-gap">Reservation is model capacity. Activity is current compute use.</p></div></section><section class="panel"><div class="panel-head"><h2>Built for your own hardware</h2><span class="pill">Spindle 0.5.2</span></div><div class="panel-body"><p class="lead">The complete creative loop, close to home.</p><p class="help section-gap">Inference uses the device endpoint you connect. Optional web search sends the query to your selected provider. Runs and outputs are saved locally. No Spindle cloud account. No external fonts or animation services.</p><div class="actions section-gap"><button class="button" id="open-connection">Connection settings ↗</button><a class="button quiet" href="/catalog.csv" download>Export catalog</a></div><p class="help section-gap">Refresh discovers new store entries and downloaded models automatically. New task types need a new adapter.</p></div></section></div><div class="section-label section-gap"><span>CAPABILITY READINESS</span><span>Real device checks, with recorded evidence.</span></div><div id="readiness" class="verification-grid"></div>`;
+  $('#readiness').parentElement.querySelector('.device-grid').insertAdjacentHTML('afterend',`<section class="panel section-gap"><div class="panel-head"><h2>Power & recovery</h2></div><div class="panel-body"><p class="help">Wait for device work to finish before restarting or shutting down.</p><div class="actions"><button class="button" id="tiiny-restart">Restart Tiiny</button><button class="button danger" id="tiiny-shutdown">Shut down Tiiny</button></div><label class="checkline"><input type="checkbox" id="tiiny-ac" disabled> Automatically power on when AC power returns</label><p class="help" id="tiiny-power-status" role="status"></p></div></section>`);
+  const ac=$('#tiiny-ac'),powerStatus=$('#tiiny-power-status'),restart=$('#tiiny-restart'),shutdown=$('#tiiny-shutdown');
+  restart.disabled=shutdown.disabled=!!state.offline;
+  api('/api/device/power').then(r=>{if(typeof r.acPower==='boolean'){ac.checked=r.acPower;ac.disabled=false;}else powerStatus.textContent='AC recovery status is unavailable.';}).catch(()=>{powerStatus.textContent='AC recovery is unavailable on this connection.';});
+  for(const [button,action,label] of [[restart,'restart','Restart'],[shutdown,'shutdown','Shut down']])button.onclick=async()=>{
+    if(!confirm(label+' your Tiiny now? Other apps connected to the device will disconnect.'))return;
+    restart.disabled=shutdown.disabled=true;powerStatus.textContent='Sending request…';
+    try{await api('/api/device/power',{action,confirm:true});powerStatus.textContent=action==='restart'?'Restart requested. Reconnect when the device is ready.':'Shutdown requested. Keep power connected until the indicator turns off.';$('#connection').textContent=action==='restart'?'Tiiny restarting…':'Tiiny shutting down…';ac.disabled=true;}
+    catch(e){powerStatus.textContent=e.message;restart.disabled=shutdown.disabled=false;}
+  };
+  ac.onchange=async()=>{const enabled=ac.checked;ac.disabled=true;try{await api('/api/device/power',{action:'ac-power',enabled,confirm:true});powerStatus.textContent='AC recovery '+(enabled?'enabled.':'disabled.');}catch(e){ac.checked=!enabled;powerStatus.textContent=e.message;}finally{ac.disabled=false;}};
   bind('#open-connection','click',()=>{page='connection';show();});
   api('/api/readiness').then(r=>{if(!$('#readiness'))return;$('#readiness').innerHTML=Object.entries(state.tasks).map(([k,t])=>{const c=r.checks?.filter(c=>c.task===k).at(-1);return `<article class="panel verification-card"><h3>${icons[k]} ${esc(t.label)}</h3><span class="pill ${c?.status==='passed'?'live':c?.status==='failed'?'warn':''}">${c?.status==='passed'?'Verified on device':c?.status==='failed'?'Needs attention':'Not checked yet'}</span><p>${esc(c?.note || 'Connect a compatible model to validate this capability.')}</p>${c?.model?`<p>${esc(c.model)}</p>`:''}</article>`;}).join('');}).catch(fail);
 }
@@ -307,6 +541,7 @@ function renderSampleStatus(){
   const sample=sampleInput?.task===task?sampleInput:null;
   const file=$('#input-file')?.files?.[0];
   slot.innerHTML=sample?`<span>✧ Sample selected: <strong>${esc(sample.file.name)}</strong></span><button type="button" class="text-button" data-clear-sample>Use my own file</button>`:file?`<span>Attached: <strong>${esc(file.name)}</strong></span><button type="button" class="text-button" data-clear-file>Remove</button>`:'';
+  if(task==='chat')chatOptionsStatus();
 }
 async function useExample(index){
   const targetTask=task;
@@ -314,15 +549,74 @@ async function useExample(index){
   if(page!=='workbench'){page='workbench';show();}
   exampleUndo={task,values:Object.fromEntries(['prompt','lyrics','documents'].map(k=>[k,$('#'+k)?.value])),sample:sampleInput};
   if(example.sample){
-    const r=await fetch('/samples/'+example.sample);if(!r.ok)throw new Error('The sample file could not be loaded. Choose your own file instead.');
-    const blob=await r.blob(),data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob);});
+    const file=await loadSampleFile(example.sample);
     if(task!==targetTask||page!=='workbench')return;
-    sampleInput={task,file:{name:example.sample,data}};
+    sampleInput={task,file};
   }
   for(const k of ['prompt','lyrics','documents'])if(example[k]!==undefined&&$('#'+k))$('#'+k).value=example[k];
   renderSampleStatus();$('#example-undo').innerHTML='<span class="small muted">Example prepared. Review it, then run when ready.</span> <button type="button" class="text-button" data-undo-example>Undo</button>';
   resizePrompt();if($('#guide-dialog').open)$('#guide-dialog').close();
   ($('#prompt') || $('#sample-status'))?.scrollIntoView({block:'nearest',behavior:'smooth'});$('#prompt')?.focus();
+}
+async function loadSampleFile(name){
+  const response=await fetch('/samples/'+name);
+  if(!response.ok)throw new Error('The sample file could not be loaded. Choose your own file instead.');
+  const blob=await response.blob();
+  const data=await new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob);
+  });
+  return {name,data};
+}
+async function insertDexPrompt(text,sampleName){
+  if(!state)throw Error('Connect your Tiiny to open Chat, or copy the prompt.');
+  const sample=sampleName?await loadSampleFile(sampleName):null;
+  if(page!=='workbench'||task!=='chat'){
+    if(task!=='chat'){
+      task='chat';selectedModel=preferredChatModel();sampleInput=null;exampleUndo=null;currentJob=null;
+    }
+    page='workbench';show();
+  }
+  const composer=$('#prompt'),hasDraft=!!composer.value.trim();
+  const hasAttachment=!!($('#input-file')?.files.length||sampleInput?.task==='chat');
+  composer.value=hasDraft?composer.value+'\n\n'+text:text;
+  if(sample&&!hasAttachment)sampleInput={task:'chat',file:sample};
+  renderSampleStatus();resizePrompt();
+  requestAnimationFrame(()=>composer.focus());
+  toast(sample&&hasAttachment?'Prompt inserted. Your existing attachment is still selected.':hasDraft?'Prompt added to your draft.':'Prompt inserted into Chat.');
+}
+function dexComparisonModels(){
+  return compatible('chat',true).map(model=>({
+    id:model.id,name:model.name,loaded:model.loaded,
+    vision:String(model.input).includes('Image'),limit:ampleResponseTokens(model),
+  }));
+}
+async function queueDexComparison({title,prompt,models,limit,sampleName,attachment}){
+  if(!state||state.offline)throw Error('Connect to the Tiiny before comparing models.');
+  if(state.demo)throw Error('Open your regular Spindle session to run a comparison on your Tiiny.');
+  if(attachment&&!['image/png','image/jpeg','image/webp'].includes(attachment.type))throw Error('Choose a PNG, JPEG, or WebP image.');
+  const file=attachment?await readFile({files:[attachment]},'chat'):sampleName?await loadSampleFile(sampleName):undefined;
+  const selected=models.map(id=>dexComparisonModels().find(model=>model.id===id));
+  if(selected.length!==2||models[0]===models[1]||selected.some(model=>!model||file&&!model.vision))throw Error('Choose two different downloaded models that accept the input.');
+  if(!Number.isSafeInteger(limit)||limit<1||selected.some(model=>model.limit<limit))throw Error('Use a response allowance that fits both models.');
+  const params={_spindleResponseMode:'explicit',max_tokens:limit,_spindleWebSearch:{enabled:false}};
+  const steps=models.map(model=>({task:'chat',model,prompt,promptMode:'literal',params,...(file?{fileFrom:'input'}:{})}));
+  const run=await api('/api/run',{name:'PromptDex comparison · '+title,steps,file,switchModels:true});
+  runs=[run,...runs.filter(job=>job.id!==run.id)];
+  void poll();
+  return run.id;
+}
+async function openPromptDex(){
+  if(!promptDex){
+    try{
+      const {createPromptDex}=await import('./prompt-dex.mjs');
+      promptDex??=createPromptDex({
+        storage:chatStorage,escape:esc,onUse:insertDexPrompt,
+        getModels:dexComparisonModels,getRun:id=>runs.find(run=>run.id===id),queueComparison:queueDexComparison,
+      });
+    }catch{toast('Restart the Spindle helper, then reload to open PromptDex.');return;}
+  }
+  closeNavigation();promptDex.open();
 }
 function recoveryHTML(message){const tip=recovery(message);return `<aside class="recovery-card"><span class="intro-label">A USEFUL NEXT STEP</span><h3>${esc(tip.title)}</h3><p>${esc(tip.text)}</p><button type="button" class="text-button" data-recovery="${tip.action}">${esc(tip.label)} →</button><details><summary>Original message</summary><pre>${esc(message)}</pre></details></aside>`;}
 function openGuide(tabName){
@@ -342,6 +636,9 @@ function openGuide(tabName){
   dialog.scrollTop=0;
 }
 document.addEventListener('click',async e=>{
+  if(e.target.closest('[data-open-prompt-dex]')){void openPromptDex();return;}
+  const del=e.target.closest('[data-delete-asset]');
+  if(del){if(!confirm('Move this output to Spindle’s local trash? The rest of the run stays in the library.'))return;del.disabled=true;try{await api('/api/library/delete',{url:del.dataset.deleteAsset});runs=await api('/api/runs');renderRuns();toast('Item moved to local trash.');}catch(err){fail(err);del.disabled=false;}return;}
   const sound=e.target.closest('[data-soundtrack]');if(sound){workshops.adoptVideo(sound.dataset.soundtrack);page='workflows';show();$('#soundtrack-workflow')?.scrollIntoView({block:'start',behavior:'smooth'});return;}
   const guide=e.target.closest('[data-guide]');if(guide){e.preventDefault();openGuide(guide.dataset.guide);return;}
   if(e.target.closest('[data-close-guide]')){$('#guide-dialog').close();return;}
@@ -361,7 +658,7 @@ bind('#close-navigation','click',closeNavigation);
 bind('#navigation-dialog','click',e=>{if(e.target===$('#navigation-dialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeNavigation();}});
 const fitViewport=()=>document.documentElement.style.setProperty('--app-height',(window.visualViewport?.height || window.innerHeight)+'px');
 window.visualViewport?.addEventListener('resize',fitViewport);window.addEventListener('resize',fitViewport);fitViewport();
-document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{page=b.dataset.page;show();});
+document.querySelectorAll('#nav [data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;show();});
 bind('#refresh','click',()=>refresh());bind('#close-dialog','click',()=>$('#model-dialog').close());
 const requestedMuseum=new URL(location.href).searchParams.get('museum');
 if(/^[a-f0-9-]{36}\.html$/.test(requestedMuseum || ''))location.replace('/api/museum/preview/'+requestedMuseum);

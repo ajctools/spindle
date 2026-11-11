@@ -44,7 +44,9 @@ The measurement guide explains coverage, timing, and fair comparisons. An exact 
 
 ### Cloud-price comparison
 
-**What would these tokens cost in the cloud?** applies representative standard API text rates to the full selected period and filters, beyond the latest 50 displayed records. Only completed text-only chat steps with known file presence and both directional token counts qualify. Image input, unknown legacy input, missing counts, failed work and other media are excluded. A reported zero stays zero; no covered steps shows a dash. Reasoning tokens are not added to output again. TiinyOS's separate ledger is not mixed into this calculation.
+**Estimated cloud cost** applies standard API text rates to the full selected period and filters, beyond the latest 50 displayed records. The 7-, 30- and 90-day windows include today and roll forward at local midnight. Open **Daily breakdown** to see which days contributed input tokens, output tokens and costs. Only completed text-only chat steps with both token counts qualify. Image input, unknown legacy input, missing counts, failed work and other media are excluded. A reported zero stays zero. A dash means no qualifying counts were available. The calculation uses reported output, which already includes reasoning tokens, and covers Spindle's own history.
+
+**Lifetime local chat tokens** adds reported input and output from all qualifying steps in Spindle's retained history for this connection, including eligible legacy records. The counter stays the same when you change dashboard filters and grows as Spindle records more qualifying chats.
 
 The presets link to [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing), [Google pricing](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite) and [OpenRouter pricing for Qwen3.5-27B](https://openrouter.ai/qwen/qwen3.5-27b), checked on November 10, 2026. Expand **Rates & assumptions** to edit USD prices per million input/output tokens or restore the published snapshot. Edits remain in this tab; rates are not automatically refreshed. The OpenRouter preset uses the published Alibaba Cloud route; other routes can have different rates, and [credit purchase fees](https://openrouter.ai/pricing) are excluded. No provider receives your usage or prompts.
 
@@ -188,8 +190,16 @@ Physical-device checks, when run, are recorded separately in the local readiness
 
 ## Boundaries
 
-Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. Transcription supports browser-decodable recordings up to 15 minutes per file. The 3D workspace submits the shape stage; a full generated texture pipeline is not implemented. The museum can display a bounded subset of embedded GLB geometry.
+Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. The Transcribe workspace accepts browser-decodable recordings up to 15 minutes per file. Meeting Desk accepts up to 30 minutes and queues minute-long chunks. The 3D workspace submits the shape stage; a full generated texture pipeline is not implemented. The museum can display a bounded subset of embedded GLB geometry.
 
 Runs and outputs survive server restarts. Active/queued runs become interrupted and require explicit rerunning. A terminated server cannot guarantee model restoration. No OS startup service or scheduled job is installed.
 
 References: [Model management](https://dev.tiiny.ai/#/concepts-model-management), [OpenAI-compatible inference](https://dev.tiiny.ai/#/inference-openai), [native multimodal APIs](https://dev.tiiny.ai/#/inference-tiiny-sdk).
+
+## Rough cuts, library, and device power
+
+In **Workflows → Recording → rough cut**, upload an MP4, WAV, or MP3 (up to two minutes and 40 MiB), or pick one from your library. Leave a short pause before each retake. Spindle uses FFmpeg to split takes at pauses, transcribes them on Tiiny, and asks a decision model which earlier takes may be expendable. Play each take and change any cut before exporting a separate file.
+
+**Library & runs** can move individual outputs to the local `data/trash` folder while retaining run history. Spindle blocks deletion when a saved workflow depends on the output.
+
+**Device → Power & recovery** offers restart, shutdown, and automatic power on after AC power returns. Spindle checks for active work before sending a power action.

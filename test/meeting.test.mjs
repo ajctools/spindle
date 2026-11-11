@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {meetingRecording,meetingChunk} from '../meeting.mjs';
+import {meetingLines,meetingMatches,meetingQuery} from '../public/meeting-desk.mjs';
+
+test('Meeting Desk splits a recording at sample boundaries and preserves the final short chunk',async()=>{
+  const header=Buffer.alloc(44),audio=Buffer.alloc(61*32000);
+  header.write('RIFF');header.write('WAVEfmt ',8);header.writeUInt32LE(16,16);
+  header.writeUInt16LE(1,20);header.writeUInt16LE(1,22);header.writeUInt32LE(16000,24);
+  header.writeUInt32LE(32000,28);header.writeUInt16LE(2,32);header.writeUInt16LE(16,34);header.write('data',36);
+  audio.writeInt16LE(1234,60*32000);
+  header.writeUInt32LE(36+audio.length,4);header.writeUInt32LE(audio.length,40);
+  const data=Buffer.concat([header,audio]),file={name:'fixture.wav',data:'data:audio/wav;base64,'+data.toString('base64')};
+  const parsed=meetingRecording(file);
+  assert.equal(parsed.duration,61);assert.equal(parsed.chunks,2);
+  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'spindle-meeting-'));
+  try{
+    const recording=path.join(temp,'fixture.wav');await fs.writeFile(recording,data);
+    assert.equal(meetingRecording(await meetingChunk(recording,0)).duration,60);
+    const tail=meetingRecording(await meetingChunk(recording,1));
+    assert.equal(tail.duration,1);assert.equal(tail.buffer.readInt16LE(44),1234);
+    await assert.rejects(meetingChunk(recording,2),/no audio/);
+    data.writeUInt32LE(0,40);
+    assert.throws(()=>meetingRecording({...file,data:'data:audio/wav;base64,'+data.toString('base64')}),/prepared/);
+  }finally{await fs.rm(temp,{recursive:true,force:true});}
+});
+
+test('Meeting Desk offsets device timestamps and falls back to a chunk when timing is unreported',()=>{
+  const lines=meetingLines({meeting:{chunkSeconds:60,duration:61},outputs:[
+    {text:'Check this.',json:{segments:[{start:2.25,text:'Research USB audio dropouts.'},{start:4,text:'The researcher took notes.'}]}},
+    {text:'C++ notes',json:{segments:[{start:10,text:'Invalid timestamp'}]}},
+  ]});
+  assert.deepEqual(lines.map(line=>[line.at,line.approximate]),[[2.25,false],[4,false],[60,true]]);
+  assert.deepEqual(meetingMatches(lines,'research,C++').map(match=>[match.index,match.matches]),[[0,['research']],[2,['C++']]]);
+  assert.equal(meetingQuery(lines[0].text,['research']),'USB audio dropouts');
+  assert.equal(meetingQuery(lines[2].text,['C++']),'C++');
+});

@@ -24,8 +24,9 @@ test('new owners can test, save, reconnect, and reset without a Tiiny CLI instal
     assert.equal(req.url,'/custom/v1/models');res.setHeader('content-type','application/json');res.end('{"data":[{"id":"owner/chat"}]}');
   });await new Promise(r=>device.listen(0,'127.0.0.1',r));
   const endpoint='http://127.0.0.1:'+device.address().port+'/custom/v1';
-  const env={...process.env,SPINDLE_PORT:'18438',SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(data,'no-cli-config.json')};delete env.TIINY_HOST;delete env.TIINY_KEY;
-  const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env,stdio:'ignore'}),base='http://127.0.0.1:18438';
+  const reservation=http.createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
+  const env={...process.env,SPINDLE_PORT:String(port),SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(data,'no-cli-config.json')};delete env.TIINY_HOST;delete env.TIINY_KEY;
+  const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env,stdio:'ignore'}),base='http://127.0.0.1:'+port;
   try{
     for(let i=0;i<60;i++){try{if((await fetch(base)).ok)break;}catch{}await pause(100);}
     const home=await fetch(base),cookie=home.headers.get('set-cookie').split(';')[0];

@@ -4,7 +4,7 @@
 
 Spindle is a browser workbench for your Tiiny. Use it to run downloaded models, pass an image or text from one step to the next, and see how each run used the device.
 
-**Preview v0.5.2 · MIT license · Node.js 22+ · No Tiiny SDK required**
+**[Latest release](https://github.com/ajctools/spindle/releases/latest) · MIT license · Node.js 22+ · No Tiiny SDK required**
 
 > [!CAUTION]
 > **READ BEFORE CONNECTING — LOCAL, SINGLE-USER SOFTWARE**
@@ -97,6 +97,14 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 ![Compact chat with Send beside remembered web-search status and collapsed options](docs/images/chat.jpg)
 
 *Chat UI validation: synthetic model and answer, with a live public search query. The pictured response is not a device-generated answer.*
+
+## PromptDex and Meeting Desk
+
+**PromptDex** comes with 20 recipes for clearer writing, model checks, vision, and workflow handoffs. Fill a sample, review the prompt, and insert it into Chat. Compare two downloaded models with the same input and response allowance, then review their answers and timings side by side.
+
+**Meeting Desk** records microphone or shared-tab audio and imports recordings up to 30 minutes. Transcribe on Tiiny, jump to timestamped sections, and prepare an editable web search from a hotword match. Only the query you submit goes to the search provider.
+
+**Security & Privacy** shows where Spindle sent chat and search traffic, along with transport and response metadata. The Chat composer also previews destinations and offers **Send to Tiiny only** for a single message.
 
 ## A dashboard with context
 
