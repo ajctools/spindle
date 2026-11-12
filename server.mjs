@@ -36,6 +36,7 @@ import {extractSoundtrack,replaceSoundtrack,soundOptions} from './soundtrack.mjs
 import {analyzeRecording,renderCut,sourceAssetPattern,sourceMime} from './rough-cut.mjs';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url)), DATA=process.env.SPINDLE_DATA_DIR || path.join(ROOT,'data');
+const {version}=JSON.parse(await fs.readFile(path.join(ROOT,'package.json'),'utf8'));
 await fs.mkdir(DATA,{recursive:true,mode:0o700}); await fs.mkdir(path.join(DATA,'assets'),{recursive:true,mode:0o700});
 const ASSETS=path.join(DATA,'assets'),TRASH=path.join(DATA,'trash');
 await fs.mkdir(TRASH,{recursive:true,mode:0o700});
@@ -1248,8 +1249,10 @@ const server=http.createServer(async(req,res)=>{
       file=path.join(ROOT,'public',p==='/'?'index.html':p.slice(1));mime=p.endsWith('.js')||p.endsWith('.mjs')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.svg')?'image/svg+xml':'text/html';
     }else{send(res,{error:'Not found'},404);return;}
     if(/^(audio|video)\//.test(mime)&&['GET','HEAD'].includes(req.method)){await sendMedia(req,res,file,mime);return;}
-    const bytes=await fs.readFile(file);res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
-      ...(p==='/'||p==='/index.html'?{'Set-Cookie':'spindle='+secret+'; HttpOnly; SameSite=Strict; Path=/'}:{}),...(p.startsWith('/assets/')&&mime==='text/html'?{'Content-Disposition':'attachment; filename="tiinyverse-museum.html"'}:{})});res.end(bytes);
+    const index=p==='/'||p==='/index.html';
+    const bytes=index?(await fs.readFile(file,'utf8')).replace('<!-- spindle-version -->',version):await fs.readFile(file);
+    res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
+      ...(index?{'Set-Cookie':'spindle='+secret+'; HttpOnly; SameSite=Strict; Path=/'}:{}),...(p.startsWith('/assets/')&&mime==='text/html'?{'Content-Disposition':'attachment; filename="tiinyverse-museum.html"'}:{})});res.end(bytes);
   }catch(e){const info=await configInfo().catch(()=>null);send(res,{error:redactError(e,[info?.connection?.key])},400);}
 });
-server.listen(PORT,HOST,()=>console.log('Spindle is ready at http://'+HOST+':'+PORT));
+server.listen(PORT,HOST,()=>console.log('Spindle v'+version+' is ready at http://'+HOST+':'+PORT));
