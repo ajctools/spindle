@@ -4,7 +4,7 @@
 
 Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, turn recordings into reviewed meeting minutes, create images and audio, and connect model steps into repeatable workflows. The dashboard keeps a history of runs and device performance.
 
-**[Current source](https://github.com/ajctools/spindle/tree/main) · [Tagged releases](https://github.com/ajctools/spindle/releases) · MIT license · Node.js 22+ · No Tiiny SDK required**
+**[Latest release](https://github.com/ajctools/spindle/releases/latest) · [Current source](https://github.com/ajctools/spindle/tree/main) · MIT license · Node.js 22+ · No Tiiny SDK required**
 
 > [!CAUTION]
 > **READ BEFORE CONNECTING — LOCAL, SINGLE-USER SOFTWARE**
@@ -31,7 +31,7 @@ Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, 
 
 ## Start in three steps
 
-1. **Get the source.** On the repository’s `main` branch, use **Code → Download ZIP**, extract it, and open a terminal in the folder containing `server.mjs`.
+1. **Get the source.** Download the versioned source ZIP from the latest release, extract it, and open a terminal in the folder containing `server.mjs`. For the current development branch, use **Code → Download ZIP** on `main`.
 2. **Install Node.js 22 or newer**, then run:
 
    ```sh

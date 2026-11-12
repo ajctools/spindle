@@ -8,7 +8,9 @@ Describe what changed, why, and how it was checked. For a model adapter, record 
 
 Capture documentation screenshots with `node scripts/preview-demo.mjs` and a fresh browser profile. Use synthetic data, label it in the docs, and review the visible content and image metadata before committing. Keep README screenshots aligned with the current default branch.
 
-Before publishing, build the allowlisted source in a new directory with `node scripts/release.mjs --out <new-directory>`. Check the Windows, macOS, and Linux GitHub Actions jobs. Release archives should come from the clean build.
+For a release, bump the version in `package.json`. Use a patch for compatible fixes and a minor version for new capabilities. The helper banner, browser footer, and release manifest read this value. Tag the verified release commit as `v<version>`, and include the version in the source archive filename. GitHub Actions checks that the tag and package version match.
+
+Before publishing, build the allowlisted source in a new directory with `node scripts/release.mjs --out <new-directory>`. Check the Windows, macOS, and Linux GitHub Actions jobs. Attach an archive from the clean build and publish release notes that list the user-facing changes.
 
 Keep the security notices clear. Do not remove missing-data labels, silently fall back to plaintext storage under a secure-storage label, expose the helper to a network, or add telemetry without an explicit design discussion.
 

@@ -45,6 +45,8 @@ test('HTTP privacy boundaries reject unauthenticated reads, rebinding, cross-ori
     for(let i=0;i<60;i++){try{if((await fetch(base)).ok)break;}catch{}await pause(100);}
     const home=await fetch(base),cookie=home.headers.get('set-cookie').split(';')[0];
     assert.match(home.headers.get('set-cookie'),/HttpOnly; SameSite=Strict/);
+    const {version}=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
+    assert.ok((await home.text()).includes('SPINDLE / COMPANION V'+version+'</div>'));
     const routes=['/api/connection','/api/runs','/api/state','/api/readiness','/api/workflows','/api/telemetry','/api/device-ledger','/api/metrics','/api/vault/documents','/catalog.json','/catalog.csv','/metrics.json','/metrics.csv','/foley','/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png'];
     for(const route of routes)assert.equal((await fetch(base+route)).status,403,route);
     assert.equal((await fetch(base+'/api/session',{headers:{'sec-fetch-site':'cross-site'}})).status,403);
