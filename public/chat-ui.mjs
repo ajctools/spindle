@@ -1,6 +1,35 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export {withResponseLimit} from './chat-settings.mjs';
 
+const compactTokens=new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1});
+const count=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
+
+export function chatRunStats(job,model){
+  const output=job.outputs?.at(-1);
+  const final=output?.task==='chat'?output:null;
+  const live=job.chatProgress;
+  const usage=final?.metrics??live;
+  const context=count(final?.context??live?.context??model?.context)||null;
+  const input=count(usage?.inputTokens),generated=count(usage?.outputTokens);
+  const inputUsed=input??count(final?.chatTiming?.estimatedInput??live?.estimatedInput);
+  const generatedUsed=generated??count(final?.chatTiming?.estimatedOutput??live?.estimatedOutput);
+  const total=count(usage?.totalTokens);
+  const used=total??(inputUsed==null?null:inputUsed+(generatedUsed??0));
+  const estimated=used!=null&&total==null&&(input==null||generated==null);
+  const ratio=used!=null&&context!=null?used/context:null;
+  const cache=count(usage?.cachedTokens);
+  const reportedRate=count(usage?.decodeTps);
+  const duration=final?.chatTiming?.durationMs;
+  const rate=reportedRate??count(live?.outputTps)??(duration>0&&generatedUsed!=null?generatedUsed*1000/duration:null);
+  return {
+    context,used,ratio,estimated,
+    tokens:(used==null?'—':(estimated?'≈':'')+compactTokens.format(used))+' / '+(context==null?'—':compactTokens.format(context)),
+    percent:ratio==null?'—':new Intl.NumberFormat(undefined,{style:'percent',maximumFractionDigits:1}).format(ratio),
+    cache:cache==null?'—':compactTokens.format(cache)+(input>0?' ('+Math.round(100*cache/input)+'%)':''),
+    rate:rate==null?'—':(reportedRate!=null?'':final&&generated!=null?'avg ':'≈')+rate.toLocaleString(undefined,{maximumFractionDigits:1})+' t/s',
+  };
+}
+
 function safeLink(value){
   try{
     const url=new URL(value);

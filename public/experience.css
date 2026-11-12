@@ -138,7 +138,6 @@ select option{background:#161c2b;color:var(--text)}
   .workspace-welcome>p{font-size:12px;max-width:270px;margin-top:10px}
   .starter-prompts{gap:7px;margin-top:22px}
   .starter-prompts .example-chip{font-size:11px;padding:9px 12px;min-height:40px;gap:10px}
-  .starter-prompts .example-chip:nth-child(n+3){display:none}
   .composer-surface{border-radius:20px;padding:7px 14px 12px}
   .creation-composer #prompt{min-height:58px}
   .creation-composer .chat-send-row .primary{flex:0 0 auto;min-height:44px;padding:9px 16px}

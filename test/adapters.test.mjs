@@ -14,7 +14,9 @@ test('all multimodal adapters preserve their request and output contracts',async
   const wav=Buffer.alloc(46);wav.write('RIFF');wav.writeUInt32LE(38,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(2,40);
   const models=Object.entries(tasks).map(([k,v])=>({id:'fixture/'+k,model_id:'fixture/'+k,name:k,type:v.types[0],input:k==='chat'?'Text,Image':'Text',output:v.output,npu_usage:0}));
   const seen=new Set();
-  let asrLoaded=true,previewRequests=0;
+  const meetingLoaded=new Set(['fixture/asr']);
+  let meetingMode=false;
+  let asrLoaded=true,previewRequests=0,summaryMessages,musicAttempts=0;
   const device=http.createServer(async(req,res)=>{
     const parts=[];for await(const p of req)parts.push(p);const raw=Buffer.concat(parts),url=new URL(req.url,'http://fixture'),p=url.pathname;
     const json=j=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(j));};
@@ -22,15 +24,40 @@ test('all multimodal adapters preserve their request and output contracts',async
     assert.equal(req.headers.authorization,'Bearer adapter-key');
     if(p==='/api/v1/models/online_models')return json(models);
     if(p==='/api/v1/models/')return json({data:models});
-    if(p==='/v1/models')return json({data:models.filter(model=>asrLoaded||model.id!=='fixture/asr')});
+    if(p==='/v1/models')return json({data:models.filter(model=>meetingMode?meetingLoaded.has(model.id):asrLoaded||model.id!=='fixture/asr')});
+    if(p==='/api/v1/tasks')return json({tasks:[]});
+    if(p==='/api/v1/models/npu/status')return json({models:[...meetingLoaded].map(model_id=>({model_id,status:'running'}))});
+    if(meetingMode&&/\/(start|stop)$/.test(p)){
+      const id=decodeURIComponent(p.split('/').at(-2));
+      if(p.endsWith('/start'))meetingLoaded.add(id);else meetingLoaded.delete(id);
+      return json({ok:true});
+    }
     if(p==='/api/v1/npu/status')return json({devices:[]});
-    if(p==='/v1/music/info')return json({model_info:{model:{supported_generation_types:['mixed']}},default_config:{generation_type:'mixed'}});
-    if(p==='/v1/chat/completions'){seen.add('chat');assert.equal(JSON.parse(raw).model,'fixture/chat');return json({choices:[{message:{content:'Hello from the device.'}}]});}
+    if(p==='/v1/music/info')return json({model_info:{model:{supported_generation_types:['mixed']}},default_config:{generation_type:'mixed',lyrics:''}});
+    if(p==='/v1/chat/completions'){
+      seen.add('chat');const body=JSON.parse(raw);assert.equal(body.model,'fixture/chat');
+      const content=body.messages.at(-1).content;
+      const prompt=Array.isArray(content)?content.find(item=>item.type==='text')?.text||'':content;
+      if(prompt.startsWith('Summarize the meeting transcript'))summaryMessages=body.messages;
+      if(prompt.startsWith('Describe the shape and colors')){
+        assert.equal(body.max_tokens,8192);
+        return json({choices:[{message:{content:'',reasoning_content:'Still thinking.'},finish_reason:'length'}]});
+      }
+      return json({choices:[{message:{content:'Hello from the device.'}}]});
+    }
     if(p==='/v1/images/generations'){seen.add('image');assert.equal(JSON.parse(raw).size,'512x512');return json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:10,output_tokens:90,total_tokens:100}});}
     if(p==='/v1/image/generate'){seen.add('edit');assert.match(JSON.parse(raw).image,/^data:image/);res.setHeader('X-Token-Usage',JSON.stringify({input_tokens:5,output_tokens:45,total_tokens:50}));return binary(png,'image/png');}
-    if(p==='/v1/audio/transcriptions'){seen.add('asr');if(raw.includes(Buffer.from('preview.wav')))previewRequests++;assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.'});}
+    if(p==='/v1/audio/transcriptions'){seen.add('asr');if(raw.includes(Buffer.from('preview.wav')))previewRequests++;assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.',segments:[{start:0,text:'A transcribed sentence.',speaker:'fixture voice'}]});}
     if(p==='/v1/audio/speech'){seen.add('speech');return json({success:true,audio_data:wav.toString('base64')});}
-    if(p==='/v1/music/generate/wav'){seen.add('music');const b=JSON.parse(raw);assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyric_text,'[instrumental]');return binary(wav,'audio/wav');}
+    if(p==='/v1/music/generate/wav'){
+      seen.add('music');const b=JSON.parse(raw);
+      if(++musicAttempts===1){
+        assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyric_text,'[instrumental]');res.statusCode=400;
+        return json({error:{message:'Extra inputs are not permitted in config: lyric_text'}});
+      }
+      assert.equal(musicAttempts,2);assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyrics,'[instrumental]');assert.equal(b.config.lyric_text,undefined);
+      return binary(wav,'audio/wav');
+    }
     if(p==='/v1/ocr'){seen.add('ocr');assert.equal(url.searchParams.get('model'),'fixture/ocr');assert.equal(JSON.parse(raw).model,undefined);return json({data:[{text:'Invoice 1042'}]});}
     if(p==='/v1/embeddings'){seen.add('embed');return json({data:[{embedding:[.1,.2,.3]}]});}
     if(p==='/v1/rerank'){seen.add('rerank');assert.equal(JSON.parse(raw).documents.length,2);return json({results:[{index:0,relevance_score:.99}]});}
@@ -67,6 +94,7 @@ test('all multimodal adapters preserve their request and output contracts',async
     assert.equal(job.outputs.find(o=>o.task==='ocr').text,'Invoice 1042');
     assert.equal(job.outputs.find(o=>o.task==='mesh').assets[0].mime,'model/gltf-binary');
     assert.equal(job.outputs.find(o=>o.task==='speech').assets[0].mime,'audio/wav');
+    assert.equal(musicAttempts,2);
     const history=await(await get('/api/metrics?days=0')).json();
     assert.equal(history.totals.totalTokens,350);assert.equal(history.totals.tokenReported,3);assert.equal(history.totals.tokenMissing,9);
     const video=history.recent.find(r=>r.task==='video');assert.equal(video.totalTokens,200);assert.equal(video.media.frames,22);assert.equal(video.media.width,832);
@@ -80,5 +108,50 @@ test('all multimodal adapters preserve their request and output contracts',async
     const checked=await(await fetch(base+'/api/check',{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify({task:'embed',model:'fixture/embed',switchModels:false})})).json();
     let readiness;for(let i=0;i<100;i++){readiness=await(await get('/api/readiness')).json();if(readiness.checks.some(c=>c.runId===checked.id))break;await pause(40);}
     assert.equal(readiness.checks.find(c=>c.runId===checked.id).status,'passed');
+    const post=(route,body)=>fetch(base+route,{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify(body)});
+    const waitForRun=async id=>{
+      for(let i=0;i<200;i++){
+        const run=(await (await get('/api/runs')).json()).find(item=>item.id===id);
+        if(['completed','failed'].includes(run?.status))return run;
+        await pause(40);
+      }
+      assert.fail('Meeting run did not finish.');
+    };
+    meetingMode=true;
+    const recording=await post('/api/meeting/transcribe',{title:'Fixture meeting',model:'fixture/asr',file:audio});
+    assert.equal(recording.status,202);
+    const meeting=await waitForRun((await recording.json()).id);
+    assert.equal(meeting.status,'completed',meeting.error);
+    const recordingPath=meeting.meeting.recording.url;
+    assert.equal((await get(recordingPath)).headers.get('content-type'),'audio/wav');
+    const range=range=>fetch(base+recordingPath,{headers:{cookie,range}});
+    const header=await range('bytes=0-3');
+    assert.equal(header.status,206);assert.equal(header.headers.get('content-range'),'bytes 0-3/46');assert.equal(await header.text(),'RIFF');
+    const tail=await range('bytes=-2');
+    assert.equal(tail.headers.get('content-range'),'bytes 44-45/46');assert.equal((await tail.arrayBuffer()).byteLength,2);
+    const invalid=await range('bytes=46-');
+    assert.equal(invalid.status,416);assert.equal(invalid.headers.get('content-range'),'bytes */46');
+    assert.equal((await fetch(base+recordingPath,{headers:{range:'bytes=0-3'}})).status,403);
+    const request=await post('/api/meeting/summary',{id:meeting.id,model:'fixture/chat'});
+    assert.equal(request.status,202);
+    const summary=await waitForRun((await request.json()).id);
+    assert.equal(summary.status,'completed',summary.error);
+    assert.equal(summary.meetingSummaryOf,meeting.id);
+    assert.equal(summary.outputs[0].webSearch,undefined);
+    assert.equal(summaryMessages.length,1);
+    assert.match(summaryMessages[0].content,/"voice":"Voice 1","text":"A transcribed sentence."/);
+    assert.doesNotMatch(summaryMessages[0].content,/fixture voice|data:audio/);
+    assert.deepEqual([...meetingLoaded],['fixture/asr']);
+    assert.equal((await post('/api/cancel/'+summary.id,{})).status,400);
+    assert.equal((await waitForRun(summary.id)).status,'completed');
+    const chatCheck=await (await post('/api/check',{task:'chat',model:'fixture/chat',switchModels:true})).json();
+    let chatReadiness;
+    for(let i=0;i<200;i++){
+      chatReadiness=(await (await get('/api/readiness')).json()).checks.find(item=>item.runId===chatCheck.id);
+      if(chatReadiness)break;
+      await pause(40);
+    }
+    assert.equal(chatReadiness?.status,'failed');
+    assert.match(chatReadiness.note,/no final answer/i);
   }finally{proc.kill();await new Promise(r=>proc.once('exit',r));await new Promise(r=>device.close(r));assert.ok(data.startsWith(path.join(root,'test')+path.sep));await fs.rm(data,{recursive:true,force:true});}
 });

@@ -63,3 +63,5 @@ The generated app uses inline custom code, the pinned standard Three.js library 
 The helper accepts compatible GLB source geometry up to 96 MiB and 3,000,000 triangles, reduces it to the display budget, and provides positions/normals as data. It supplies no shader, scene or camera code to the author model. Optional FFmpeg creates smaller audio copies without inference. Unsupported geometry remains downloadable with an explanation.
 
 Generated code can fail; software-browser checks are not performance benchmarks for every phone/GPU. Saved source, reports and screenshots make the result reviewable. Histories and generated artifacts stay in ignored local data and are excluded from source releases. See [Security & privacy](SECURITY.md) for HTTP and remembered-key limitations.
+
+**Before sharing an export**, check the included source images, user-supplied screenshots, exhibit text, narration, and generated code. The self-contained HTML includes its media.

@@ -1,5 +1,18 @@
+const downloads=await import('./artifact-download.mjs').catch(()=>null);
+
+export function cutSheet(segments,cuts){
+  const time=seconds=>{
+    const ms=Math.round(seconds*1000);
+    const whole=Math.floor(ms/1000);
+    return [Math.floor(whole/3600),Math.floor(whole/60)%60,whole%60].map(part=>String(part).padStart(2,'0')).join(':')+'.'+String(ms%1000).padStart(3,'0');
+  };
+  const rows=segments.map((segment,index)=>`Take ${index+1}   ${time(segment.from)} → ${time(segment.to)}   ${cuts.has(index)?'CUT':'KEEP'}`);
+  return ['Rough Cut · Cut sheet','Times are relative to the original recording.','',...rows,''].join('\n');
+}
+
 export function createRoughCut({api,escape,modelOptions,preferred,readFile,poll,toast}){
   let root,jobId,shown,source='';
+  const decisions=new Map();
   const $=q=>root.querySelector(q);
   function mount(element,runs){
     root=element;shown=null;
@@ -29,17 +42,27 @@ export function createRoughCut({api,escape,modelOptions,preferred,readFile,poll,
     shown=j.id;
     const {video,segments,sourceAsset}=j.roughCut,tag=video?'video':'audio';
     const label={keep:'Keep',review:'Review suggested',replaced:'Possible retake',false_start:'Possible false start'};
-    $('#cut-review').innerHTML=`<h3>Review ${segments.length} ${segments.length===1?'take':'takes'}</h3><p class="help">${segments.length===1?'No separate retake was found. Try pausing before each new attempt.':'Check each suggestion against the original. Uncheck any take you want to keep.'}</p><${tag} id="cut-player" controls preload="metadata" src="${escape(sourceAsset)}"></${tag}><ol class="cut-takes">${segments.map((s,i)=>`<li><div><button type="button" class="button quiet" data-seek="${s.from}" data-end="${s.to}">Play take ${i+1} · ${s.from.toFixed(1)}s</button><span class="pill">${label[s.choice]||'Review'}</span></div><p>${escape(s.text||'No speech recognized')}</p><label class="checkline"><input type="checkbox" data-cut="${i}" ${s.cut?'checked':''}> Cut this take</label></li>`).join('')}</ol><button class="button primary" id="cut-export">Export reviewed cut</button><p id="cut-export-status" class="help" role="status"></p><div id="cut-result"></div>`;
+    const cuts=decisions.get(j.id) || new Set(segments.flatMap((segment,index)=>segment.cut?[index]:[]));
+    decisions.set(j.id,cuts);
+    $('#cut-review').innerHTML=`<h3>Review ${segments.length} ${segments.length===1?'take':'takes'}</h3><p class="help">${segments.length===1?'No separate retake was found. Try pausing before each new attempt.':'Play each take and choose which ones to cut.'}</p><${tag} id="cut-player" controls preload="metadata" src="${escape(sourceAsset)}"></${tag}><ol class="cut-takes">${segments.map((s,i)=>`<li><div><button type="button" class="button quiet" data-seek="${s.from}" data-end="${s.to}">Play take ${i+1} · ${s.from.toFixed(1)}s</button><span class="pill">${label[s.choice]||'Review'}</span></div><p>${escape(s.text||'No speech recognized')}</p><label class="checkline"><input type="checkbox" data-cut="${i}" ${cuts.has(i)?'checked':''}> Cut this take</label></li>`).join('')}</ol>
+      <div class="actions"><button class="button primary" id="cut-export">Export reviewed cut</button>${downloads?'<button class="button" id="cut-sheet">Download cut sheet (.txt)</button>':''}</div><p id="cut-export-status" class="help" role="status"></p><div id="cut-result"></div>`;
     const player=$('#cut-player');
     let end=null;
     player.addEventListener('timeupdate',()=>{if(end!==null&&player.currentTime>=end){player.pause();end=null;}});
     root.querySelectorAll('[data-seek]').forEach(b=>b.onclick=()=>{end=Number(b.dataset.end);player.currentTime=Number(b.dataset.seek);player.play().catch(()=>{end=null;});});
+    root.querySelectorAll('[data-cut]').forEach(input=>input.onchange=()=>{
+      const index=Number(input.dataset.cut);
+      if(input.checked)cuts.add(index);else cuts.delete(index);
+    });
+    if(downloads)$('#cut-sheet').onclick=()=>{
+      downloads.downloadArtifact('rough-cut-'+j.id.slice(0,8)+'.txt',cutSheet(segments,cuts));
+      toast('Cut sheet downloaded.');
+    };
     $('#cut-export').onclick=async()=>{
       const button=$('#cut-export'),status=$('#cut-export-status'),result=$('#cut-result');
       button.disabled=true;status.textContent='Exporting…';
       try{
-        const cuts=[...root.querySelectorAll('[data-cut]:checked')].map(e=>Number(e.dataset.cut));
-        const output=await api('/api/rough-cut/export',{id:j.id,cuts});
+        const output=await api('/api/rough-cut/export',{id:j.id,cuts:[...cuts]});
         status.textContent='Saved in Library & runs.';
         result.innerHTML=`<${tag} controls preload="metadata" src="${escape(output.url)}"></${tag}> <a class="button" href="${escape(output.url)}" download>Download reviewed cut</a>`;
         toast('Rough cut exported.');await poll();

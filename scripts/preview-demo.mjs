@@ -8,11 +8,12 @@ import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {tasks} from '../core.mjs';
 import {createMetric,usageFrom} from '../metrics.mjs';
+import {voiceReferenceSample} from '../public/guidance.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),data=await fs.mkdtemp(path.join(os.tmpdir(),'spindle-demo-'));
 await fs.mkdir(path.join(data,'assets'));const imageId=randomUUID()+'.png';await fs.copyFile(path.join(root,'fixtures','star.png'),path.join(data,'assets',imageId));
 const names={chat:'Atlas · demo chat',image:'Prism · demo image',asr:'Listen · demo transcription',speech:'Voice · demo speech',music:'Score · demo music',video:'Motion · demo video',ocr:'Read · demo documents',mesh:'Shape · demo 3D',decision:'Route · demo classification',embed:'Index · demo embeddings',rerank:'Rank · demo relevance'};
-const models=Object.entries(tasks).map(([key,t])=>({id:'demo/'+key,model_id:'demo/'+key,name:names[key],type:t.types[0],input:key==='chat'?'Text,Image':t.input,output:t.output,params:'Demo',npu_usage:key==='chat'?38:24,total_size:4*1073741824,owned_by:'Synthetic illustration',desc:'Fictional model used only to illustrate the interface. Not an available Tiiny model.'}));
+const models=Object.entries(tasks).map(([key,t])=>({id:'demo/'+key,model_id:'demo/'+key,name:names[key],type:t.types[0],input:key==='chat'?'Text,Image':t.input,output:t.output,params:'Demo',npu_usage:key==='chat'?38:24,total_size:4*1073741824,...(key==='chat'?{context_window:65536}:{}),...(key==='speech'?{supported:['Voice Cloning']}:{}),owned_by:'Synthetic illustration',desc:'Fictional model used only to illustrate the interface. Not an available Tiiny model.'}));
 const runs=[],records=[];
 for(let day=6;day>=0;day--)for(let index=0;index<(7-day)*2+5;index++){
   const task=Object.keys(tasks)[index%11],started=new Date();started.setDate(started.getDate()-day);started.setHours(9+index%9,index*3%60,0,0);
@@ -28,6 +29,16 @@ for(let day=6;day>=0;day--)for(let index=0;index<(7-day)*2+5;index++){
   if(task==='video')metric.videoCount=1;if(['speech','music'].includes(task)){metric.audioCount=1;metric.audioRealtimeFactor=10/(duration/1000);}
   records.push(metric);
 }
+const demoAudio=randomUUID()+'.wav',meetingId=randomUUID(),meetingDate=new Date(Date.now()-60000).toISOString();
+await fs.copyFile(path.join(root,'fixtures',voiceReferenceSample.sample),path.join(data,'assets',demoAudio));
+runs.unshift({
+  id:meetingId,name:'Meeting · Observatory planning (demo)',status:'completed',createdAt:meetingDate,finishedAt:meetingDate,steps:[{task:'asr',model:'demo/asr'}],
+  meeting:{recording:{url:'/assets/'+demoAudio,mime:'audio/wav'},duration:5.555,chunkSeconds:30},
+  outputs:[{task:'asr',model:'demo/asr',text:voiceReferenceSample.refText,assets:[],json:{segments:[
+    {start:0,text:'The observatory opens at dusk.',speaker:1},
+    {start:2.2,text:'Bring a notebook and a red flashlight.',speaker:1},
+  ]}}],
+});
 await fs.writeFile(path.join(data,'runs.json'),JSON.stringify(runs));await fs.writeFile(path.join(data,'metrics.ndjson'),records.map(r=>JSON.stringify(r)).join('\n')+'\n');
 await fs.writeFile(path.join(data,'readiness.json'),JSON.stringify({checks:[]}));
 const gateway=http.createServer((req,res)=>{

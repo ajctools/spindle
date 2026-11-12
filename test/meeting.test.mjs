@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {meetingRecording,meetingChunk} from '../meeting.mjs';
+import {meetingRecording,meetingChunk,meetingSummaryStep} from '../meeting.mjs';
 import {meetingLines,meetingMatches,meetingQuery} from '../public/meeting-desk.mjs';
 
 test('Meeting Desk splits a recording at sample boundaries and preserves the final short chunk',async()=>{
@@ -37,4 +37,19 @@ test('Meeting Desk offsets device timestamps and falls back to a chunk when timi
   assert.deepEqual(meetingMatches(lines,'research,C++').map(match=>[match.index,match.matches]),[[0,['research']],[2,['C++']]]);
   assert.equal(meetingQuery(lines[0].text,['research']),'USB audio dropouts');
   assert.equal(meetingQuery(lines[2].text,['C++']),'C++');
+});
+
+test('device voice labels stay anonymous per section and the summary uses only transcript evidence with search off',()=>{
+  const run={meeting:{chunkSeconds:60,duration:70,recording:{url:'/assets/private.wav'}},outputs:[
+    {json:{data:{segments:[{start:2,text:'Archive the notes.',speaker:'Original label'},{start:3,text:'Due Monday.',speaker_id:'Original label'},{start:6,text:'Still undecided.',speaker:0}]}}},
+    {json:{segments:[{start:1,text:'Maybe meet Friday.',speaker:'Original label'}]}},
+  ]};
+  assert.deepEqual(meetingLines(run).map(line=>line.speaker),['Section 1, voice 1','Section 1, voice 1','Section 1, voice 2','Section 2, voice 1']);
+  const step=meetingSummaryStep(run,{id:'test/chat',context:8192});
+  assert.equal(step.promptMode,'literal');
+  assert.deepEqual(step.params._spindleWebSearch,{enabled:false});
+  assert.match(step.prompt,/"time":"01:01","voice":"Section 2, voice 1","text":"Maybe meet Friday."/);
+  assert.doesNotMatch(step.prompt,/Original label|private\.wav/);
+  assert.throws(()=>meetingSummaryStep(run,{id:'test/chat',context:512}),/too long/);
+  assert.throws(()=>meetingSummaryStep({...run,outputs:[]},{id:'test/chat'}),/no saved transcript/);
 });

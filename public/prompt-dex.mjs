@@ -252,6 +252,13 @@ export function parsePromptDex(text){
     id:typeof entry.id==='string'&&/^[a-f0-9-]{36}$/i.test(entry.id)?entry.id:crypto.randomUUID(),
   }));
 }
+function storedPrompts(storage){
+  const text=storage?.getItem(storageKey);
+  return text?parsePromptDex(text):[];
+}
+export function searchPromptDex(storage){
+  try{return [...starters,...storedPrompts(storage)];}catch{return starters;}
+}
 export function fillPrompt(template,values){
   return template.replace(tokenPattern,(token,name)=>Object.hasOwn(values,name)&&values[name].trim()?values[name]:token);
 }
@@ -299,10 +306,7 @@ export function createPromptDex({storage,escape:esc,onUse,getModels,getRun,queue
   const current=()=>entries().find(entry=>entry.id===selected);
   const tell=message=>{status.textContent=message;};
 
-  function stored(){
-    const text=storage?.getItem(storageKey);
-    return text?parsePromptDex(text):[];
-  }
+  const stored=()=>storedPrompts(storage);
   function persist(next){
     const text=JSON.stringify({version:1,entries:next});
     if(next.length>maxEntries||new Blob([text]).size>maxBytes)throw Error('The library can hold up to 200 prompts and 2 MiB.');
@@ -582,11 +586,14 @@ export function createPromptDex({storage,escape:esc,onUse,getModels,getRun,queue
     update(){
       if(dialog.open&&comparing){comparisonReady();renderComparisonResults();}
     },
-    open(){
+    open(id){
       if(dialog.open)return;
       tell('Custom prompts are saved in this browser.');
       try{mine=stored();}catch{tell('Saved prompts could not be read from browser storage.');}
       comparisons=savedComparisons();
+      if(id&&entries().some(entry=>entry.id===id)){
+        search.value='';tier.value='';capability.value='';editor=null;select(id);
+      }
       refresh();dialog.showModal();search.focus();
     },
   };

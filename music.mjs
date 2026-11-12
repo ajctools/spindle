@@ -11,3 +11,12 @@ export function musicRequest(model,prompt,params={},info={},forceTopLevel=false)
   return {model:model.id,config:{caption:caption || prompt,generation_type:type,...rest,...(type==='mixed'?{lyric_text:text || '[instrumental]'}:text?{lyric_text:text}:{})}};
 }
 export function musicNeedsTopLevel(error){const message=String(error?.message || error);return /^Tiiny 422:/.test(message)&&/\[\s*"body"\s*,\s*"prompt"\s*\]/.test(message)&&/\[\s*"body"\s*,\s*"config"\s*,\s*"caption"\s*\]/.test(message);}
+
+export function musicSchemaFallback(body,error,info={}){
+  const message=String(error?.message||error);
+  if(typeof body?.config?.lyric_text!=='string'||!/^Tiiny (?:400|422):\s+Extra inputs are not permitted in config:\s*lyric_text\s*$/i.test(message))return null;
+  const defaults=info.default_config||{};
+  if(!Object.hasOwn(defaults,'lyrics')||Object.hasOwn(defaults,'lyric_text'))return null;
+  const {lyric_text,...config}=body.config;
+  return {...body,config:{...config,lyrics:lyric_text}};
+}

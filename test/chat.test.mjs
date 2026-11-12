@@ -1,9 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatMessage,chatSettings,readChatResponse} from '../chat.mjs';
-import {chatDetails,chatMarkdown,withResponseLimit} from '../public/chat-ui.mjs';
+import {chatMessage,chatSampleSettings,chatSettings,readChatResponse,requestChatResponse} from '../chat.mjs';
+import {chatDetails,chatMarkdown,chatRunStats,withResponseLimit} from '../public/chat-ui.mjs';
 import {loadChatOptions,saveChatOptions,ampleResponseTokens} from '../public/chat-settings.mjs';
 import {createMetric} from '../metrics.mjs';
+
+test('capability checks leave room for a final answer when reasoning cannot be disabled',()=>{
+  assert.deepEqual(chatSampleSettings({thinking:{toggleable:true}}),{max_tokens:8192,chat_template_kwargs:{enable_thinking:false}});
+  assert.deepEqual(chatSampleSettings({thinking:{supported:false}}),{max_tokens:8192});
+  assert.deepEqual(chatSampleSettings({thinking:{supported:true},context:8192}),{max_tokens:4096});
+  assert.deepEqual(chatSampleSettings({context:32768}),{max_tokens:8192});
+});
 
 test('chat separates model reasoning and tagged thoughts from the answer',()=>{
   assert.deepEqual(chatMessage({content:'Answer',reasoning_content:'Consider this.'}),{text:'Answer',reasoning:'Consider this.'});
@@ -27,8 +34,15 @@ test('ample response allowance respects small contexts and explicit runtime defa
   assert.equal(defaults.max_tokens,32768);assert.equal(defaults.max_completion_tokens,undefined);
   assert.equal(withResponseLimit({max_tokens:7200},'default').max_tokens,7200);
   assert.equal(chatSettings(withResponseLimit({},'default')).max_tokens,undefined);
-  assert.equal(ampleResponseTokens({context:16384}),8192);assert.equal(ampleResponseTokens({context:131072}),32768);assert.equal(ampleResponseTokens({context:'unknown'}),32768);
+  assert.equal(ampleResponseTokens({context:16384}),8192);
+  assert.equal(ampleResponseTokens({context:65536}),32768);
+  assert.equal(ampleResponseTokens({context:131072}),65536);
+  assert.equal(ampleResponseTokens({context:262144}),65536);
+  assert.equal(ampleResponseTokens({context:'unknown'}),32768);
   assert.equal(chatSettings({}, {context:8192}).max_tokens,4096);
+  assert.equal(chatSettings({}, {context:262144}).max_tokens,65536);
+  const ample=withResponseLimit({},'ample','',{context:262144});
+  assert.equal(chatSettings(ample,{context:65536}).max_tokens,32768);
   assert.deepEqual(withResponseLimit({temperature:0.6,max_completion_tokens:4000},'16384'),{temperature:0.6,_spindleResponseMode:'explicit',max_tokens:16384});
   assert.equal(withResponseLimit({},'custom','24000').max_tokens,24000);
   assert.equal(chatSettings({max_tokens:null}).max_tokens,32768);
@@ -49,12 +63,28 @@ test('chat preferences retain web search and response settings without storing s
   const blocked={getItem(){throw new Error('blocked');},setItem(){throw new Error('blocked');}};assert.equal(loadChatOptions(blocked).responseLimit,'ample');assert.equal(saveChatOptions(blocked,fresh),false);
 });
 test('stream decoder handles split UTF-8, CRLF boundaries, reasoning, usage and completion',async()=>{
-  const events=[{choices:[{delta:{reasoning_content:'A thought 🌟'}}]}, {choices:[{delta:{content:'An answer.'}}]}, {choices:[{delta:{},finish_reason:'length'}]}, {choices:[],usage:{prompt_tokens:5,completion_tokens:9,total_tokens:14},timings:{predicted_per_second:12}}];
+  const events=[{choices:[{delta:{reasoning_content:'A thought 🌟'}}],usage:{prompt_tokens:5,prompt_tokens_details:{cached_tokens:0}}}, {choices:[{delta:{content:'An answer.'}}],usage:null}, {choices:[{delta:{},finish_reason:'length'}]}, {choices:[],usage:{completion_tokens:9,total_tokens:14},timings:{predicted_per_second:12}}];
   const data=Buffer.from(events.map(e=>'data: '+JSON.stringify(e)+'\r\n\r\n').join('')+'data: [DONE]\r\n\r\n');let cursor=0;const updates=[];
   const response=new Response(new ReadableStream({pull(controller){if(cursor>=data.length){controller.close();return;}controller.enqueue(data.subarray(cursor,cursor+1));cursor++;}}),{headers:{'content-type':'text/event-stream'}});
-  const result=await readChatResponse(response,{onUpdate:out=>updates.push(out)});
+  const result=await readChatResponse(response,{onUpdate:(out,json)=>updates.push({out,usage:json.usage})});
   assert.equal(result.streamed,true);assert.equal(result.reasoning,'A thought 🌟');assert.equal(result.text,'An answer.');assert.equal(result.finishReason,'length');assert.equal(result.json.usage.total_tokens,14);assert.equal(result.json.timings.predicted_per_second,12);
-  assert.ok(updates.some(out=>out.reasoning&&!out.text));
+  assert.ok(updates.some(({out,usage})=>out.reasoning&&!out.text&&usage.prompt_tokens===5));
+  assert.equal(result.json.usage.prompt_tokens_details.cached_tokens,0);
+});
+test('chat context shows live text estimates and replaces them with reported usage',()=>{
+  const live=chatRunStats({chatProgress:{context:65536,estimatedInput:19000,estimatedOutput:100,outputTps:2}},{context:32768});
+  assert.equal(live.context,65536);
+  assert.equal(live.used,19100);
+  assert.equal(live.ratio,19100/65536);
+  assert.equal(live.estimated,true);
+  assert.match(live.rate,/^≈/);
+  assert.equal(live.cache,'—');
+  const final=chatRunStats({outputs:[{task:'chat',context:65536,metrics:{inputTokens:19000,outputTokens:124,cachedTokens:0,decodeTps:2}}]});
+  assert.equal(final.used,19124);
+  assert.equal(final.estimated,false);
+  assert.equal(final.cache,'0 (0%)');
+  assert.equal(final.rate,'2 t/s');
+  assert.equal(chatRunStats({chatProgress:{context:65536,estimatedOutput:30}}).ratio,null);
 });
 test('chat handles JSON responses and fails visibly on interrupted or invalid streams',async()=>{
   const result=await readChatResponse(Response.json({choices:[{message:{content:'Final',reasoning:'Reasoning'},finish_reason:'stop'}]}));assert.equal(result.streamed,false);assert.equal(result.text,'Final');assert.equal(result.reasoning,'Reasoning');
@@ -64,6 +94,46 @@ test('chat handles JSON responses and fails visibly on interrupted or invalid st
   await assert.rejects(readChatResponse(stream('data: {"error":{"message":"bad model"}}\n\n')),/bad model/);
   await assert.rejects(readChatResponse(Response.json({choices:[]})),/no chat message/);
   await assert.rejects(readChatResponse(stream('data: [DONE]\n\n')),/empty/);
+});
+test('chat stays connected while data arrives and retains partial output on a stall',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const encoder=new TextEncoder();
+  let stream,requestSignal,update;
+  const request=signal=>{
+    requestSignal=signal;
+    const body=new ReadableStream({start(controller){
+      stream=controller;
+      signal.addEventListener('abort',()=>controller.error(signal.reason),{once:true});
+    }});
+    return new Response(body,{headers:{'content-type':'text/event-stream'}});
+  };
+  const start=()=>requestChatResponse(request,{startupTimeout:100,idleTimeout:100,onUpdate:partial=>update.resolve(partial)});
+  const send=async delta=>{
+    update=Promise.withResolvers();
+    stream.enqueue(encoder.encode('data: '+JSON.stringify({choices:[{delta}]})+'\n\n'));
+    return update.promise;
+  };
+
+  const finished=start();
+  await send({reasoning_content:'Thinking.'});
+  t.mock.timers.tick(75);
+  await send({content:'An answer'});
+  t.mock.timers.tick(75);
+  assert.equal(requestSignal.aborted,false);
+  await send({content:' that took longer than the startup timeout.'});
+  stream.enqueue(encoder.encode('data: [DONE]\n\n'));
+  const {result}=await finished;
+  assert.equal(result.text,'An answer that took longer than the startup timeout.');
+  assert.equal(result.reasoning,'Thinking.');
+  t.mock.timers.tick(100);
+  assert.equal(requestSignal.aborted,false);
+
+  const stalled=start();
+  const rejection=assert.rejects(stalled,{name:'TimeoutError',message:/stream stopped sending data/});
+  const partial=await send({content:'A partial answer'});
+  t.mock.timers.tick(100);
+  await rejection;
+  assert.equal(partial.text,'A partial answer');
 });
 test('reasoning and source cards render inert text and safe links',()=>{
   const html=chatDetails({reasoning:'<script>alert(1)</script>',webSearch:{provider:'brave',query:'<img>',searchedAt:'2026-01-01',sources:[{url:'javascript:alert(1)',title:'unsafe'},{url:'https://example.com',title:'<img onerror=bad>',snippet:'<script>bad</script>'}]},finishReason:'length'});

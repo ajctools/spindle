@@ -59,7 +59,7 @@ export function mountCostPanel(root){
   const inputs=root.querySelectorAll('[data-price]');
 
   function render(){
-    const {cloudUsage:usage,days,period,dailyCloudUsage,lifetimeCloudUsage}=data??{};
+    const {cloudUsage:usage,days,period,dailyCloudUsage,lifetimeCloudUsage,scope}=data??{};
     const periodText=period?.startDate
       ? `Rolling ${days} days · ${dates.formatRange(calendarDate(period.startDate),calendarDate(period.endDate))}`
       : period?'All time':'Selected dashboard period';
@@ -73,7 +73,7 @@ export function mountCostPanel(root){
       const {inputTokens,outputTokens,covered,completed}=lifetimeCloudUsage;
       lifetimeTotal.textContent=covered?number.format(inputTokens+outputTokens):'—';
       lifetimeCoverage.textContent=completed
-        ? `This connection · ${number.format(covered)}/${number.format(completed)} completed steps included`
+        ? `${scope==='all'?'All saved connections':'Current connection'} · ${number.format(covered)}/${number.format(completed)} completed steps included`
         : 'No completed chat steps yet';
     }
 

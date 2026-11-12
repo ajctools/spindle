@@ -41,13 +41,19 @@ test('HTTP privacy boundaries reject unauthenticated reads, rebinding, cross-ori
   const env={...process.env,SPINDLE_PORT:'18440',SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(data,'missing-config.json')};delete env.TIINY_HOST;delete env.TIINY_KEY;
   const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env,stdio:'ignore'}),base='http://127.0.0.1:18440';
   try{
+    await fs.writeFile(path.join(data,'tiiny-foley.html'),'<title>Private local fixture</title>');
     for(let i=0;i<60;i++){try{if((await fetch(base)).ok)break;}catch{}await pause(100);}
     const home=await fetch(base),cookie=home.headers.get('set-cookie').split(';')[0];
     assert.match(home.headers.get('set-cookie'),/HttpOnly; SameSite=Strict/);
-    const routes=['/api/connection','/api/runs','/api/state','/api/readiness','/api/workflows','/api/telemetry','/api/device-ledger','/api/metrics','/catalog.json','/catalog.csv','/metrics.json','/metrics.csv','/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png'];
+    const routes=['/api/connection','/api/runs','/api/state','/api/readiness','/api/workflows','/api/telemetry','/api/device-ledger','/api/metrics','/api/vault/documents','/catalog.json','/catalog.csv','/metrics.json','/metrics.csv','/foley','/assets/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png'];
     for(const route of routes)assert.equal((await fetch(base+route)).status,403,route);
     assert.equal((await fetch(base+'/api/session',{headers:{'sec-fetch-site':'cross-site'}})).status,403);
     assert.equal((await fetch(base+'/api/connection',{headers:{cookie,origin:'https://example.org'}})).status,403);
+    assert.equal((await fetch(base+'/foley',{headers:{cookie,'sec-fetch-site':'cross-site'}})).status,403);
+    const foley=await fetch(base+'/foley',{headers:{cookie}});
+    assert.equal(foley.status,200);
+    assert.equal(foley.headers.get('set-cookie'),null);
+    assert.equal(await foley.text(),'<title>Private local fixture</title>');
     const rebound=await new Promise((resolve,reject)=>{http.get(base+'/api/connection',{headers:{cookie,Host:'attacker.invalid:18440'}},res=>{res.resume();resolve(res.statusCode);}).on('error',reject);});assert.equal(rebound,403);
     const local=await fetch(base+'/api/connection',{headers:{cookie}});assert.equal(local.status,200);assert.equal(local.headers.get('cross-origin-resource-policy'),'same-origin');assert.match(local.headers.get('content-security-policy'),/base-uri 'none'/);
     for(const route of ['/data/connection.json','/.env','/server.mjs','/.git/config'])assert.equal((await fetch(base+route,{headers:{cookie}})).status,404);
