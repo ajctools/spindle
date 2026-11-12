@@ -14,7 +14,7 @@ See [the full security and privacy notes](docs/SECURITY.md) for the threat model
 
 Use the repository's **Security → Report a vulnerability** feature for private reports. Do not post API keys, real endpoints, personal logs, screenshots containing private data or exploitable details in public issues. Provide a minimal reproduction with fabricated credentials and synthetic data.
 
-The current 0.5.x preview is the supported development line. There is no guaranteed response time or independent security certification.
+Report issues against the current `main` branch or identify the tagged release you used. There is no guaranteed response time or independent security certification.
 
 ## Optional external web search
 

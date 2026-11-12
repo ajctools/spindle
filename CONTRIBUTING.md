@@ -6,7 +6,9 @@ Use synthetic fixtures and fabricated credentials. Never commit `data/`, actual 
 
 Describe what changed, why, and how it was checked. For a model adapter, record request/response contracts in an isolated mock test. A passing mock does not establish hardware compatibility. If you share physical-device results, remove identifiers and distinguish observed output from advertised metadata.
 
-Documentation screenshots must use the read-only demo and remain clearly labeled as synthetic. Do not present demo rates as Tiiny benchmarks.
+Capture documentation screenshots with `node scripts/preview-demo.mjs` and a fresh browser profile. Use synthetic data, label it in the docs, and review the visible content and image metadata before committing. Keep README screenshots aligned with the current default branch.
+
+Before publishing, build the allowlisted source in a new directory with `node scripts/release.mjs --out <new-directory>`. Check the Windows, macOS, and Linux GitHub Actions jobs. Release archives should come from the clean build.
 
 Keep the security notices clear. Do not remove missing-data labels, silently fall back to plaintext storage under a secure-storage label, expose the helper to a network, or add telemetry without an explicit design discussion.
 

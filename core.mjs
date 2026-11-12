@@ -27,7 +27,7 @@ export function normalize(store, local, loaded) {
       npu:nonnegative(m.npu_usage), storeNpu:nonnegative(s?.npu_usage), size:nonnegative(m.total_size || m.size || tag?.size),
       params:m.params || null, input:m.input || null, output:m.output || null,
       capabilities:m.capabilities || [], supported:m.supported || [], thinking:active?.thinking || m.thinking || null,
-      reasoningLevels:active?.reasoning_levels || m.reasoning_levels || [], context:m.context_window || null,
+      reasoningLevels:active?.reasoning_levels || m.reasoning_levels || [], context:active?.context_window || m.context_window || null,
       updated:m.udpate_time || m.updated_time || null, version:m.version_label || tag?.version || null,
       updateAvailable:!!m.need_update, description:m.desc || '',
       evidence:'Device-reported metadata; inference support requires runtime validation' };

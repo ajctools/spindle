@@ -16,7 +16,7 @@ export function normalizeConnection(value) {
     key:value.key.trim(),hostRouting:value.hostRouting!==false};
 }
 export function deviceURL(connection,route,transport='native') {
-  if(route.startsWith('/api/'))return connection.managementBase+route;
+  if(route.startsWith('/api/')||route.startsWith('/kb/'))return connection.managementBase+route;
   return (transport==='openai'?connection.openaiBase:connection.nativeBase)+route.replace(/^\/v1/,'');
 }
 export function publicConnection(connection,source,remembered=false){

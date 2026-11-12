@@ -1,10 +1,11 @@
 export const CHAT_PREFERENCES_KEY='spindle-chat-preferences-v1';
+export const AMPLE_RESPONSE_TOKENS=65_536;
 export const DEFAULT_CHAT_OPTIONS=Object.freeze({responseLimit:'ample',customTokens:32768,thinking:'auto',effort:'auto',stream:true,search:true,provider:'duckduckgo',query:''});
 const limits=['ample','default','4096','8192','16384','32768','custom'];
 export function ampleResponseTokens(model={}){
   const context=Number(model.context);
   // Leave half of a smaller reported context for input; this is not tokenization.
-  return Number.isSafeInteger(context)&&context>1?Math.min(32768,Math.floor(context/2)):32768;
+  return Number.isSafeInteger(context)&&context>1?Math.min(AMPLE_RESPONSE_TOKENS,Math.floor(context/2)):32_768;
 }
 export function loadChatOptions(storage){
   const options={...DEFAULT_CHAT_OPTIONS};

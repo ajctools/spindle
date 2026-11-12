@@ -14,7 +14,9 @@ node server.mjs
 
 Open **http://127.0.0.1:8437**. On Windows, `Start-Spindle.ps1` also starts it using your installed Node.js runtime.
 
-The first screen for a new owner is **Connection**. Enter a device URL such as `http://192.0.2.10`, or an OpenAI-compatible base URL ending in `/v1`. Paste the key from TiinyOS **Settings → API Key**, test the connection, then connect.
+The first screen for a new owner is **Device → Connection**. Enter a device URL such as `http://192.0.2.10`, or an OpenAI-compatible base URL ending in `/v1`. Paste the key from TiinyOS **Settings → API Key**, test the connection, then connect. Keep the terminal open. After updating the source, wait for active work to finish, stop the existing helper with Ctrl+C in its terminal, start the updated helper, and reload the browser.
+
+![First connection screen under Device with a documentation-only endpoint](images/connection.jpg)
 
 - Leave **Remember on this computer** off for a connection held in server memory until shutdown.
 - Turn it on to save settings in `data/connection.json`. This file contains the unencrypted key and is excluded from Git. Windows uses the selected folder’s inherited permissions; use a private folder.
@@ -25,18 +27,18 @@ Configuration precedence: environment overrides, a Spindle session connection, s
 
 Optional environment variables: `TIINY_HOST`, `TIINY_KEY`, `TIINY_CONFIG`, `SPINDLE_PORT`, and `SPINDLE_DATA_DIR`. For an environment file, copy `.env.example` to `.env`, edit it, and run `node --env-file=.env server.mjs`.
 
-## Dashboard & performance history
+Once connected, Spindle opens **Chat & create** with Chat & vision selected, including after a fresh reload. Use the workspace picker for images, audio, video, and the other creation modes. On phones, the menu button opens the main navigation. Open **Device** for Overview, Models, Connection, and Security & Privacy.
 
-Once connected, Spindle opens **Chat & create** with Chat & vision selected, including after a fresh reload. Use the workspace picker for images, audio, video, and the other creation modes. On phones, the menu button opens navigation to Dashboard, Workflows, Library & runs, Models, Device, and Connection.
+## Dashboard & performance history
 
 **Dashboard** shows Spindle usage, daily activity, all 11 capabilities, hardware load, model comparisons, and expandable measurement records.
 
-- Filter local history by 7/30/90 days or all time, capability, model, and benchmark samples. CSV and JSON exports contain the full filtered history; the screen shows the latest 50 detailed records.
+- The dashboard starts with **All time** and **All saved connections**, including runs saved under earlier device URLs. Filter local history by date range, connection, capability, model, and benchmark samples. CSV and JSON exports contain the full filtered history. The screen shows the latest 50 detailed records.
 - Track input/output/total tokens from response bodies, runtime timings, JSON usage headers, or individual token headers. Image and video tokens are retained when supplied, alongside media counts, dimensions, frames, and durations. Unreported token usage stays missing; media counts are never treated as tokens.
 - Compare median and p95 execution times, runtime decode/prefill t/s, video generation frames/s, and audio output seconds per processing second. Spindle measures execution separately from model preparation and restoration. First-token latency is not yet recorded. Web-enabled execution times include the search request; compare benchmarks with web search disabled.
 - Run the **Spindle text v1** benchmark with 1, 3, or 5 sequential samples on an already loaded chat model. Its fixed prompt, output-token cap, temperature, seed, model/version, and timing data are recorded. The text-baseline chart preserves a speed timeline. Prompt caching and concurrent device work can affect results.
 - Read actual NPU activity, CPU, RAM, NPU memory, storage, and model reservation. A compact NPU/CPU/RAM strip remains visible across workspaces, sampling every five seconds while the tab is visible. Missing readings show a dash and failed refreshes mark previous readings stale. Samples retain up to 24 hours / 3,000 points, checkpointed approximately every minute. Missing intervals are not connected in the trace.
-- TiinyOS’s weekly device counter is shown as a **separate ledger**, with previous-week navigation. It can overlap Spindle records and may exclude media; its totals are never added to Spindle totals.
+- **Tiiny’s weekly counter** shows the exact device-wide total reported by TiinyOS across apps, with previous-week navigation. **Spindle reported tokens** sums the totals returned to completed local runs for the selected filters. These counts can overlap, and either source can have incomplete media usage.
 
 Measurements persist in ignored `data/metrics.ndjson`. The append journal deduplicates steps across restarts and can enrich older records from local files. Older runs retain reported usage; only single-step runs without model switching have a usable legacy duration. Older device attribution and removed input-file presence are unknown and labeled accordingly. This history covers Spindle requests, not every request from other clients.
 
@@ -46,7 +48,7 @@ The measurement guide explains coverage, timing, and fair comparisons. An exact 
 
 **Estimated cloud cost** applies standard API text rates to the full selected period and filters, beyond the latest 50 displayed records. The 7-, 30- and 90-day windows include today and roll forward at local midnight. Open **Daily breakdown** to see which days contributed input tokens, output tokens and costs. Only completed text-only chat steps with both token counts qualify. Image input, unknown legacy input, missing counts, failed work and other media are excluded. A reported zero stays zero. A dash means no qualifying counts were available. The calculation uses reported output, which already includes reasoning tokens, and covers Spindle's own history.
 
-**Lifetime local chat tokens** adds reported input and output from all qualifying steps in Spindle's retained history for this connection, including eligible legacy records. The counter stays the same when you change dashboard filters and grows as Spindle records more qualifying chats.
+**Lifetime local chat tokens** adds reported input and output from all qualifying steps in the selected connection scope, including eligible legacy records. It covers all dates, models, and benchmarks in that scope.
 
 The presets link to [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing), [Google pricing](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite) and [OpenRouter pricing for Qwen3.5-27B](https://openrouter.ai/qwen/qwen3.5-27b), checked on November 10, 2026. Expand **Rates & assumptions** to edit USD prices per million input/output tokens or restore the published snapshot. Edits remain in this tab; rates are not automatically refreshed. The OpenRouter preset uses the published Alibaba Cloud route; other routes can have different rates, and [credit purchase fees](https://openrouter.ai/pricing) are excluded. No provider receives your usage or prompts.
 
@@ -72,9 +74,17 @@ Advanced JSON exposes model-specific parameters. Runtime info reads the selected
 
 **Test capability** runs a real sample and records its result under **Device → Capability readiness**. Some models take several minutes to load or generate. Preparation, execution, progress, and restoration are shown separately.
 
+In **Speech**, **Clone a synthetic voice** prepares a playable reference recording, its transcript, and new text to speak. It selects a downloaded voice-clone model when Spindle recognizes one. You can substitute your own recording or one you have permission to use and enter its exact words under **Speech options**. Tiiny receives the recording and transcript. The generated audio and reference text are saved locally. Voice cloning and control over delivery depend on the model and firmware.
+
+**Search Spindle** in the top bar (Ctrl+K or ⌘K) finds saved chat prompts and replies, meeting transcripts, library runs, saved workflows, PromptDex entries, models, and workspace shortcuts. Open a meeting text result to jump to that part of the recording. Search runs in the browser using your local Spindle data. It does not send or save your search terms.
+
+**PromptDex** provides prompts for writing, model checks, vision, and workflow handoffs. Prepare and edit a prompt, then insert it into Chat or run a comparison. Comparisons use the same text, optional image, and response allowance for two downloaded compatible models, with web search off. The comparison saves both results to the local run history.
+
+**Meeting Desk.** Record a microphone or share a tab with audio, or import a recording. Hotwords mark live preview clips as well as matching lines in the saved transcript. A saved match can prepare an editable web query; only submitting that query sends it to DuckDuckGo. Voice labels appear when Tiiny supplies speaker segments. They are anonymous and can reset between sections. Open **Summary & minutes** on a completed transcript and select a downloaded chat model. **Generate summary** gives you an overview. **Draft minutes** gives you editable decisions, action items, and questions. Use **Check source** to jump to the transcript and cue the recording. Mark checked items as reviewed, and clear any item you want to omit. **Save review** keeps your changes in Spindle. The Markdown download includes the visible minutes, review status, and source times. Spindle sends the transcript to Tiiny with web search off. Choose a model with a larger context if the transcript is too long.
+
 ## Chat controls and web search
 
-**Compact composer.** Send sits directly beneath the prompt, with the effective allowance and web-search state beside it. Replies appear in the conversation above the composer. New chat is in the workspace header; starting points and Tips & examples prepare inputs without running them. Chat options is collapsed initially. Open it for response length, search, thinking, attachments, advanced JSON, model switching, and workflow tools.
+**Compact composer.** Send sits directly beneath the prompt, with the effective allowance and web-search state beside it. Replies appear above the composer. New chat, PromptDex, and Tips & examples are in the workspace header. Use the composer’s **Image** or **Attach from Vault** controls to attach material. Open **Chat options** for response length, search, thinking, advanced JSON, model switching, and workflow tools.
 
 **Create with defaults.** Each media workspace starts with its prompt or required file and a Create action. A downloaded compatible model is chosen automatically, preferring a loaded model. Optional voice, lyrics, reference images, preview settings, and advanced parameters stay inside that workspace’s collapsed options. Video keeps its short-preview default. Transcription, document reading, and 3D expose their required file directly; ranking exposes candidate documents. Results and playback appear above the composer.
 
@@ -82,11 +92,17 @@ The compact prompt grows to a bounded height as you type. Send stays directly be
 
 **3D preview.** Compatible saved GLB artifacts display an inline geometry viewer in results and Library. Drag/touch to orbit, scroll or use +/− to zoom, use Reset, or choose Expand for a larger dialog. Arrow keys orbit, +/− zoom and R resets when the canvas is focused. Escape closes the expanded viewer. Spindle prepares dense originals locally with a 96 MiB / 3,000,000-triangle source limit, reducing to at most 100,000 triangles and a 20 MiB browser limit. Original files stay unchanged and downloadable. No model is called for a preview, external GLB resources are never fetched, and unsupported/compressed geometry or unavailable WebGL is explained. This previews static geometry and base colors, not a generated texture/animation pipeline. Idle viewers do not redraw continuously.
 
-**Maximum response tokens** defaults to **Ample · up to 32,768 tokens**. For a smaller reported context window, Spindle reduces Ample to half that window to reserve room for input. This is not a measurement of actual remaining space; a long conversation can still exhaust context. It is a ceiling for device workload rather than a paid token allowance, and does not force the model to produce that many tokens. Reasoning can share it with the final answer. Other presets cover 4,096, 8,192, 16,384, and 32,768 tokens; Custom accepts a positive whole number. Runtime default / Advanced JSON sends no Spindle cap unless your JSON supplies one. Explicit selections override JSON token limits. Response choice, custom value, streaming choice, search on/off, and provider persist in this browser; prompts, explicit search queries, and API keys are not written to these preferences. Fixed benchmark and capability-check caps remain 128 and 100 tokens respectively.
+**Maximum response tokens** defaults to **Ample · up to 65,536 tokens**. Spindle caps Ample at half the reported context to reserve room for input and uses 32,768 tokens when the model provides no context size. This is not a measurement of actual remaining space; a long conversation can still exhaust context. It is a ceiling for device workload rather than a paid token allowance, and does not force the model to produce that many tokens. Reasoning can share it with the final answer. Other presets cover 4,096, 8,192, 16,384, and 32,768 tokens; Custom accepts a positive whole number. Runtime default / Advanced JSON sends no Spindle cap unless your JSON supplies one. Explicit selections override JSON token limits. Response choice, custom value, streaming choice, search on/off, and provider persist in this browser; prompts, explicit search queries, and API keys are not written to these preferences. Text benchmarks remain capped at 128 tokens. Chat capability checks ask for a short answer and allow up to 8,192 tokens for models that reason before answering, reduced for smaller reported contexts. Spindle turns off thinking for the sample when the loaded model reports a toggle.
+
+During a chat run, the status strip shows elapsed time, context use, output speed, and prompt-cache hits. Context capacity comes from the selected model. The `≈` marker indicates a text-based estimate while Tiiny has yet to provide token counts. Some firmware reports usage only at the end, and some does not report cache data. A dash means a measurement is unavailable. A reported zero is displayed as zero.
 
 **Thinking mode** uses the Tiiny `chat_template_kwargs.enable_thinking` control when a model reports a toggle. **Reasoning effort** lists only reported levels. Model default sends no override. Returned `reasoning_content`, `reasoning`, `thinking`, and `<think>` blocks appear separately in a collapsed Thinking panel, including while streaming. These are model-provided text, not a guarantee that all internal reasoning is exposed. Reasoning and source cards remain in local run history. Only the answer is passed onward to workflow steps.
 
 **Show the response as it arrives** is on by default. The helper decodes SSE and retains usage/timings from final stream events. JSON responses are also accepted. If firmware rejects the stream request, turn this option off; Spindle does not automatically repeat a request that might have already run. A partial response remains visible after a stream failure. A token-limit notice shows the requested cap when known and recommends a larger visible limit or asking to continue.
+
+**Attach from Vault.** In Chat, choose a document and preview an opening excerpt, or search for a specific passage. Spindle searches supported text files directly on your Tiiny and can use Vault search for indexed documents. The selected excerpt goes to Tiiny with your next message. To keep the prompt on Tiiny as well, choose **Send to Tiiny only** or turn off web search.
+
+**Default chat model.** Choose a downloaded model in Chat options. Spindle can preload it when Chat opens on an idle, empty device. Loading appears beside the model picker. To load or unload a specific model manually, open **Device → Models**.
 
 **Search the web before each message** is on by default, and its on/off choice and provider are remembered across reloads in this browser. The notice beside Send stays visible while Chat options is collapsed. Turn it off in Chat options for local-only inference. Enabling it sends only the explicit search query—or the current prompt when the query field is blank—to the chosen provider. Use an explicit, short query to keep sensitive material out of searches. Conversation history, image attachments, and the Tiiny key are not sent to the search provider. Search-enabled workflow steps use these same settings; saved workflows keep the choice and query, never the Brave key.
 
@@ -98,7 +114,9 @@ The compact prompt grows to a bounded height as you type. Send stays directly be
 
 ## Guidance that stays close to the task
 
-The Field guide explains each workspace, suggests ways to improve results, and covers model states, NPU capacity, context, steps, and seeds. Tips & examples and the optional start strip in the guide help first-time owners get one useful result.
+Open **Field guide** in the top bar for help with the current workspace. It covers Meeting Desk, Dashboard, guided workflows, finding and reusing saved work, device setup, model capacity, and privacy. **Tips & examples** opens the guide for the selected creation task.
+
+![Field guide opened from Meeting Desk with the current workspace selected](images/field-guide.jpg)
 
 Example prompts and synthetic sample files prepare inputs without starting inference. Undo restores the previous prompt or sample. Contextual recovery cards explain useful next steps and keep the original technical error available in a disclosure. Workflow preflight checks catch missing or mismatched file handoffs before running.
 
@@ -176,7 +194,7 @@ The server binds to loopback. Private reads and writes require an HTTP-only sess
 
 Use `node scripts/release.mjs --out <new-directory>` to create a clean source folder using an explicit manifest. The output directory must not already exist. The builder scans source content and fixture metadata, and compares it with locally configured device credentials and OS identifiers without printing their values. No local configuration is copied.
 
-Publish that extracted source folder or an archive made from it. Do not upload the development workspace, owner-specific screenshots, catalog exports, or runtime data. See [Security and privacy](docs/SECURITY.md) for the local trust boundary, plaintext HTTP and saved-key limitations, and handling files already committed elsewhere.
+Publish that extracted source folder or an archive made from it. Do not upload the development workspace, owner-specific screenshots, catalog exports, or runtime data. See [Security and privacy](SECURITY.md) for the local trust boundary, plaintext HTTP and saved-key limitations, and handling files already committed elsewhere.
 
 ## Tests
 
@@ -198,7 +216,9 @@ References: [Model management](https://dev.tiiny.ai/#/concepts-model-management)
 
 ## Rough cuts, library, and device power
 
-In **Workflows → Recording → rough cut**, upload an MP4, WAV, or MP3 (up to two minutes and 40 MiB), or pick one from your library. Leave a short pause before each retake. Spindle uses FFmpeg to split takes at pauses, transcribes them on Tiiny, and asks a decision model which earlier takes may be expendable. Play each take and change any cut before exporting a separate file.
+In **Workflows → Recording → rough cut**, upload an MP4, WAV, or MP3 (up to two minutes and 40 MiB), or pick one from your library. Leave a short pause before each retake. Spindle uses FFmpeg to split takes at pauses, transcribes them on Tiiny, and asks a decision model which earlier takes may be expendable. Play each take and change any cut before exporting a separate recording. **Download cut sheet** saves your current choices and source timecodes as plain text for use in an editor.
+
+In **Workflows → Facsimile Book**, add up to six scans or try the three synthetic sample letters. Type or paste the original text and provide a translation or choose **Draft translation** to use a downloaded chat model. Mark pages as reviewed. A downloaded speech model can narrate each reviewed page. The HTML download opens offline and contains the scans and text of the reviewed pages, plus narration if selected. Spindle prepares scans in the browser and sends only text for model steps. Booklet edits stay in the current browser session. Download before reloading to keep a copy.
 
 **Library & runs** can move individual outputs to the local `data/trash` folder while retaining run history. Spindle blocks deletion when a saved workflow depends on the output.
 

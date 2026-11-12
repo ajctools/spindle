@@ -1,13 +1,16 @@
 import {mountDashboard,stopDashboard,refreshDashboard} from './dashboard.js';
 import {transcriptionFile} from './audio.js';
-import {guides,essentials,workflowTips,recovery,workflowWarnings} from './guidance.mjs';
-import {chatDetails,chatMarkdown} from './chat-ui.mjs';
+import {guides,essentials,workflowTips,workspaceTips,recovery,workflowWarnings,voiceCloneModel,voiceReferenceSample} from './guidance.mjs';
+import {chatDetails,chatMarkdown,chatRunStats} from './chat-ui.mjs';
 import {meshPreviewHTML,installMeshPreviews} from './mesh-preview.mjs';
 import {startDevicePulse} from './activity.mjs';
 import {createRoughCut} from './rough-cut.mjs';
-import {loadChatOptions,saveChatOptions,withResponseLimit,ampleResponseTokens} from './chat-settings.mjs';
+import {loadChatOptions,saveChatOptions,withResponseLimit,ampleResponseTokens,AMPLE_RESPONSE_TOKENS} from './chat-settings.mjs';
 // Source upgrades can reach a browser before its helper has been restarted.
 // Keep existing workspaces usable until the helper can serve the new module.
+const globalSearch=await import('./global-search.mjs').catch(()=>null);
+const vaultAttachment=await import('./vault-attachment.mjs').catch(()=>null);
+const facsimileModule=await import('./facsimile-book.mjs').catch(()=>null);
 const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>({
   mount(element){element.innerHTML='<section class="panel"><div class="panel-head"><h2>Idea → image → film</h2><span class="pill">Helper restart needed</span></div><div class="panel-body"><p>The new workflow is installed. Restart the local helper with <code>node server.mjs</code>, then reload Spindle.</p><p class="help section-gap">Wait for active runs to finish first. Saved runs are kept. If your Tiiny key is session-only, enter it again after restarting.</p></div></section>';},
   update(){},adopt(){}
@@ -15,12 +18,19 @@ const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>(
 const {createWorkshops}=await import('./workshops.mjs').catch(()=>({createWorkshops:()=>({mount(element){element.innerHTML='<p class="help">Restart the helper to load the soundtrack and museum workflows.</p>';},update(){},adoptVideo(){}})}));
 const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=null,page='workbench',task='chat',selectedModel='',currentJob=null,chat=[],runs=[],saved=[],workflow={name:'Untitled workflow',steps:[]};
-let filters={q:'',type:'all',status:'all'},polling=false,connectionInfo=null,sampleInput=null,exampleUndo=null;
+let filters={q:'',type:'all',status:'all'},connectionInfo=null,sampleInput=null,exampleUndo=null;
 let chatStorage;try{chatStorage=window.localStorage;}catch{}
 let chatOptions=loadChatOptions(chatStorage);
 let warmingChatModel='';
+let warmChatError=null;
 let promptDex=null;
 let meetingDesk=null;
+let runsTag='',pollPromise=null,librarySelection='';
+const deviceSections={device:'Overview',models:'Models',connection:'Connection',security:'Security & Privacy'};
+const searchPages=[...document.querySelectorAll('#nav [data-page],#nav [data-open-prompt-dex]')].map(button=>({
+  type:'page',id:button.dataset.page||'prompt-dex',title:button.querySelector('span').textContent,
+}));
+searchPages.push(...Object.entries(deviceSections).filter(([id])=>id!=='device').map(([id,title])=>({type:'page',id,title})));
 const icons={chat:'◈',image:'▧',asr:'≋',speech:'◖',music:'♫',video:'▷',ocr:'▤',mesh:'⬡',decision:'⑂',embed:'∷',rerank:'↕'};
 const descriptions={chat:'Think, write, code, and understand images.',image:'Generate an image or work from a reference.',asr:'Turn a recording into text.',speech:'Give your words a voice.',music:'Compose from a description and optional lyrics.',video:'Create a clip from a prompt or animate an image.',ocr:'Extract text and document layout from an image.',mesh:'Turn an image into a 3D shape.',decision:'Evaluate structured questions and route a request.',embed:'Turn text into vectors for retrieval.',rerank:'Sort candidate documents by relevance.'};
 async function api(url,body){
@@ -43,6 +53,7 @@ function preferredChatModel(){return compatible('chat',true).find(m=>m.id===stat
 function taskOptions(id){return Object.entries(state.tasks).map(([k,t])=>`<option value="${k}" ${id===k?'selected':''}>${esc(t.label)}</option>`).join('');}
 const studio=createStudio({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
 const roughCut=createRoughCut({api,escape:esc,modelOptions,preferred,readFile,poll,toast});
+const facsimileBook=facsimileModule?.createFacsimileBook({api,getState:()=>state,modelOptions,preferred,poll});
 const workshops=createWorkshops({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
 function heading(eyebrow,title,lead,actions=''){return `<div class="title-row"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="lead">${lead}</p></div><div class="actions">${actions}</div></div>`;}
 async function refresh(render=true){
@@ -55,8 +66,21 @@ async function refresh(render=true){
   }catch(e){$('#connection').textContent='Connection needed';$('#banner').hidden=false;$('#banner').textContent=e.message;if(!state){page='connection';connectionPage();}}
   finally{b.disabled=false;}
 }
+function renderNavigation(){
+  const inDevice=Object.hasOwn(deviceSections,page);
+  document.querySelectorAll('#nav button').forEach(button=>{
+    const selected=button.dataset.page===(inDevice?'device':page);
+    button.classList.toggle('selected',selected);
+    if(selected)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  });
+  if(!inDevice)return;
+  $('#breadcrumb').textContent=page==='device'?'Device':'Device / '+deviceSections[page];
+  $('#view').insertAdjacentHTML('afterbegin',`<nav class="device-navigation" aria-label="Device sections">${Object.entries(deviceSections).map(([id,label])=>`<button type="button" data-device-section="${id}" ${page===id?'aria-current="page"':''} ${!state&&['device','models'].includes(id)?'disabled':''}>${esc(label)}</button>`).join('')}</nav>`);
+  document.querySelectorAll('[data-device-section]').forEach(button=>button.onclick=()=>{page=button.dataset.deviceSection;show();});
+}
 function show(){
   if(page!=='meeting')meetingDesk?.leave();
+  if(page!=='library')librarySelection='';
   stopDashboard();
   closeNavigation();
   document.body.classList.toggle('creating',page==='workbench');
@@ -64,33 +88,40 @@ function show(){
   if(page==='connection'){connectionPage();return;}
   if(page==='meeting'){
     $('#breadcrumb').textContent='Meeting Desk';
-    document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
+    renderNavigation();
     void openMeetingDesk();return;
   }
   if(page==='security'){
-    $('#breadcrumb').textContent='Security & Privacy';
-    document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
-    securityPage();return;
+    securityPage();renderNavigation();return;
+  }
+  if(page==='library'){
+    $('#breadcrumb').textContent='Library & runs';
+    renderNavigation();
+    libraryPage();return;
   }
   if(!state){page='connection';connectionPage();return;}$('#breadcrumb').textContent=({dashboard:'Dashboard',workbench:'Chat & create',workflows:'Workflows',library:'Library & runs',models:'Models',device:'Device'})[page];
-  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page===page));
   ({dashboard:dashboardPage,workbench:workbench,workflows:workflowPage,library:libraryPage,models:modelsPage,device:devicePage})[page]();
+  renderNavigation();
 }
-async function openMeetingDesk(){
+async function openMeetingDesk(result){
   if(!meetingDesk){
     try{
       const {createMeetingDesk}=await import('./meeting-desk.mjs');
       meetingDesk??=createMeetingDesk({
         api,escape:esc,getRuns:()=>runs,modelOptions,preferred,
-        isLoaded:id=>state.models.some(model=>model.id===id&&model.loaded),onModelLoaded:()=>refresh(false),
+        isLoaded:id=>state?.models.some(model=>model.id===id&&model.loaded),onModelLoaded:()=>refresh(false),
         onQueued:run=>{runs=[run,...runs.filter(item=>item.id!==run.id)];void poll();},
+        onRunChanged:poll,
       });
     }catch{
       if(page==='meeting')$('#view').innerHTML='<p class="help">Restart the Spindle helper after active runs finish, then reload to open Meeting Desk.</p>';
       return;
     }
   }
-  if(page==='meeting')meetingDesk.mount($('#view'));
+  if(page==='meeting'){
+    if(!$('#view .meeting-desk'))meetingDesk.mount($('#view'));
+    if(result)meetingDesk.openRun(result.id,result.at);
+  }
 }
 function dashboardPage(){mountDashboard($('#view'),{api,getState:()=>state,navigate:next=>{page=next;show();},toast});}
 const traceNames={chat:'Tiiny inference',search:'Web search',forecast:'Weather forecast',check:'Device API check'};
@@ -221,10 +252,15 @@ function securityPage(){
 function fileField(label='Reference image',accept='image/*'){return `<label class="field"><span>${label}</span><input id="input-file" type="file" accept="${accept}"></label>`;}
 function extraFields(){
   if(task==='image')return fileField('Reference image · optional')+'<p class="help">Reference-image support varies by model. Inspect runtime defaults before choosing settings.</p>';
-  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to 32,768 tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to 32,768 output tokens, reduced to half a smaller reported context window to leave room for input. Thinking can share this allowance. This is a workload ceiling, not a paid token allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web before each message</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The query below—or your current prompt if left blank—is sent to the selected search provider over HTTPS. Conversation history, images, and your Tiiny key are not sent to it. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to search your current prompt"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. DuckDuckGo may rate-limit requests; a failed search stops the run rather than generating an ungrounded answer.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
+  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to ${AMPLE_RESPONSE_TOKENS.toLocaleString()} output tokens, capped at half the reported context to leave room for input. With no reported context, Ample requests 32,768. Thinking can share this allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web before each message</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The query below—or your current prompt if left blank—is sent to the selected search provider over HTTPS. Conversation history, images, and your Tiiny key are not sent to it. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to search your current prompt"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. DuckDuckGo may rate-limit requests; a failed search stops the run rather than generating an ungrounded answer.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
   if(task==='asr')return fileField('Recording · WAV, MP3, M4A, WebM, and more','audio/*')+'<p class="help">Converted locally for Tiiny. Use a clear recording under 40 MiB and up to 15 minutes.</p>';
   if(task==='video')return fileField('Starting image · optional')+'<label class="checkline"><input type="checkbox" id="video-preview" checked> Short preview · overrides duration and size on supported models</label>'+'<div class="field-row"><label class="field"><span>Duration · seconds, optional</span><input id="seconds" type="number" min="1" placeholder="Model default"></label><label class="field"><span>Size · optional</span><input id="size" placeholder="Model default"></label></div>';
-  if(task==='speech')return '<label class="field"><span>Voice ID · optional, model-specific</span><input id="voice" placeholder="Use the model’s default voice"></label>';
+  if(task==='speech')return `<label class="field"><span>Voice ID · optional, model-specific</span><input id="voice" placeholder="Use the model’s default voice"></label>
+    <section id="voice-reference" hidden><h3>Voice reference</h3>
+    <p class="help">Use your own voice, a recording you have permission to use, or the synthetic sample. The clip and transcript go to Tiiny. The generated audio and reference text are saved locally.</p>
+    ${fileField('Reference recording · up to 30 seconds','audio/*')}
+    <audio id="voice-sample-preview" controls preload="none" aria-label="Listen to the synthetic reference voice" src="/samples/${voiceReferenceSample.sample}" hidden></audio>
+    <label class="field"><span>Exact words spoken in the reference</span><textarea id="ref-text" rows="2" maxlength="2000"></textarea></label></section>`;
   if(task==='music')return '<label class="field"><span>Lyrics · optional</span><textarea id="lyrics" placeholder="[verse]…"></textarea></label>';
   if(task==='ocr'||task==='mesh')return fileField(task==='mesh'?'Object image · transparent PNG recommended':'Document image');
   if(task==='rerank')return '<label class="field"><span>Candidate documents · one per line</span><textarea id="documents" placeholder="First candidate document\nSecond candidate document"></textarea></label>';
@@ -234,15 +270,23 @@ function extraFields(){
 function workbench(){
   if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=task==='chat'?preferredChatModel():preferred(task);
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
+  const hasVault=isChat&&!state.demo&&vaultAttachment;
   const titles={chat:'What’s on your mind?',image:'Picture something new.',asr:'Make every word useful.',speech:'Give your words a voice.',music:'Find your next sound.',video:'Set your ideas in motion.',ocr:'A clearer view of your documents.',mesh:'Give an image a new dimension.',decision:'Find the right direction.',embed:'Find meaning in your text.',rerank:'Bring the best match forward.'};
   const action=isChat?'Send':({image:'Create image',asr:'Transcribe',speech:'Create speech',music:'Create music',video:'Create video',ocr:'Read document',mesh:'Create 3D object',decision:'Evaluate',embed:'Create embeddings',rerank:'Rank documents'})[task];
   $('#view').innerHTML=`<section class="creation-workspace" aria-label="${esc(label)} workspace">
     <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
-    <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,3).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
+    <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,4).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
     <div id="chat-history" class="chat-history" role="log" aria-label="Conversation"></div>
     <section class="workspace-result" id="workspace-result" aria-label="Result" hidden><div class="result-status"><span id="output-status" role="status">Ready</span></div><div class="output-area" id="output" aria-live="polite"></div></section></div>
+    ${isChat?`<section id="chat-run-stats" class="chat-run-stats" aria-label="Chat run statistics" hidden>
+      <span class="chat-run-clock"><span class="spinner" aria-hidden="true" hidden></span><span data-chat-time></span></span>
+      <span class="chat-context"><span data-chat-context>Context —</span><progress aria-label="Context window used" max="100" hidden></progress><span data-chat-percent></span></span>
+      <span data-chat-rate></span><span data-chat-cache></span>
+    </section>`:''}
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
-    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label><span id="model-load-status" class="sr-only" role="status"></span>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}</div>
+    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog">Attach from Vault</button>':''}</div>
+    <div id="model-load-status" class="model-load-status" role="status"><span class="spinner" aria-hidden="true" hidden></span><span></span></div>
+    ${hasVault?'<div id="vault-attached" hidden><span></span><button class="button quiet" type="button" aria-label="Remove Vault excerpt">×</button></div>':''}
     ${!fileOnly?`<label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="2" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" required></textarea></label>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
     <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit">Send to Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
@@ -252,32 +296,34 @@ function workbench(){
     ${isChat||!fileOnly&&task!=='rerank'?extraFields():''}
     <details><summary>Advanced settings</summary><p class="help">Optional. Leave {} for model defaults. Add settings only when the selected model supports them.</p><textarea id="params" aria-label="Advanced JSON parameters">${task==='decision'?JSON.stringify({questions:{route:{type:'choice',instructions:'Which team should handle this?',criteria:{general:null,technical:null,billing:null}}}},null,2):'{}'}</textarea></details>
     <p class="help privacy-inline">Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.</p><label class="checkline"><input id="auto-model" type="checkbox" checked> Switch models if needed, then restore my loaded models.</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
-    </div></details></form></section>`;
+    </div></details></form>${hasVault?vaultAttachment.vaultDialogHTML:''}</section>`;
+  const vault=hasVault?vaultAttachment.bindVaultAttachment({api,dialog:$('#vault-dialog'),open:$('#attach-vault'),attached:$('#vault-attached'),onChange:chatOptionsStatus}):null;
   $('#breadcrumb').textContent='Chat & create';
   bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=task==='chat'?preferredChatModel():preferred(task);currentJob=null;workbench();});
   bind('#prompt','input',resizePrompt);
   bind('#attach-image','click',()=>$('#input-file').click());
   renderSampleStatus();
-  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chat=[];currentJob=null;$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
+  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chat=[];vault?.clear();currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
   if(task==='chat')bindChatControls();
   bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;selectedModel=preferredChatModel();workbench();});
   bind('#task-form','submit',async e=>{
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
     const tiinyOnly=e.submitter?.id==='send-tiiny-only';
+    const vaultReference=vault?.reference;
     const input=form.querySelector('#prompt')?.value || '',messages=task==='chat'?chat.map(({role,content})=>({role,content})):[],switchModels=form.querySelector('#auto-model').checked;
     disableSend(form,true);
     try{
       const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,...(tiinyOnly?{tiinyOnly:true}:{})});
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
-      if(s.task==='chat'){chat.push({role:'user',content:input});$('#prompt').value='';resizePrompt();chatOptionsStatus();}
-      if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();scrollConversation();poll();
+      if(s.task==='chat'){chat.push({role:'user',content:input,vaultSource:vaultReference?.name});if(vaultReference&&vault?.reference===vaultReference)vault.clear();$('#prompt').value='';resizePrompt();chatOptionsStatus();}
+      if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(j);scrollConversation();poll();
     }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
   });
   bind('#check-model','click',async()=>{try{if(!selectedModel)throw new Error('Choose a downloaded model.');const j=await api('/api/check',{task,model:selectedModel,switchModels:$('#auto-model').checked});currentJob=j.id;toast('A sample check is queued. Its result will be recorded in Device readiness.');poll();}catch(e){fail(e);}});
-  bind('#add-workflow','click',async()=>{try{const s=await getStep(false);workflow.steps.push({...s,file:undefined,fileFrom:['asr','ocr','mesh'].includes(task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast('Added a '+state.tasks[task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
+  bind('#add-workflow','click',async()=>{try{const s=await getStep(false),needsVoiceReference=s.task==='speech'&&!!s.file;workflow.steps.push({...s,file:undefined,fileFrom:needsVoiceReference||['asr','ocr','mesh'].includes(s.task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast(needsVoiceReference?'Speech step added. Supply its reference recording as the workflow’s starting file.':'Added a '+state.tasks[s.task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
   if(task==='video'){const preview=()=>{for(const id of ['seconds','size']){const e=$('#'+id);if(e)e.disabled=$('#video-preview').checked;}};bind('#video-preview','change',preview);preview();}
   bind('#runtime','click',async()=>{try{const j=await api('/api/runtime?task='+task+'&model='+encodeURIComponent(selectedModel));$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output').innerHTML='<div class="output-meta">RUNTIME DEFAULTS · READ FROM DEVICE</div><pre>'+esc(JSON.stringify(j,null,2))+'</pre>';$('#output-status').textContent='Runtime info';}catch(e){fail(e);}});
   if(currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}
@@ -288,6 +334,7 @@ async function warmDefaultChat(){
   const id=state.defaultChatModel;
   if(!id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
   warmingChatModel=id;
+  warmChatError=null;
   renderModelLoad();
   const status=$('#default-chat-status');
   if(status)status.textContent='Loading the default chat model…';
@@ -295,7 +342,7 @@ async function warmDefaultChat(){
     const result=await api('/api/chat/default/load',{});
     if(result.status==='ready')await refresh(false);
     if(status)status.textContent=result.status==='ready'?'Default chat model loaded.':'Loads when Chat opens on an idle, empty device.';
-  }catch(e){if(status)status.textContent='Default model could not preload. '+e.message;}
+  }catch(e){warmChatError={id,message:e.message};if(status)status.textContent='Default model could not preload. '+e.message;}
   finally{warmingChatModel='';if(page==='workbench'&&task==='chat')renderModelLoad();}
 }
 function renderModelLoad(){
@@ -310,14 +357,17 @@ function renderModelLoad(){
     const label=modelLabel(model,status);
     if(option.textContent!==label)option.textContent=label;
   }
-  const model=models.get(picker.value);
-  const selectedLoad=model&&load?.id===model.id?load:null;
-  $('.composer-model-progress').hidden=!selectedLoad||selectedLoad.ready;
+  const model=state.models.find(model=>model.id===load?.id);
+  $('.composer-model-progress').hidden=!load||load.ready||picker.value!==load.id;
   const status=$('#model-load-status');
-  const announcement=selectedLoad?(selectedLoad.ready?model.name+' loaded.':'Loading '+model.name+'…'):'';
-  if(status.textContent!==announcement)status.textContent=announcement;
+  const name=model?.name||load?.id;
+  const error=task==='chat'&&warmChatError?.id===picker.value?warmChatError:null;
+  const announcement=load?(load.ready?name+' loaded.':'Loading '+name+'…'):error?'Default model could not load. See Chat options.':'';
+  status.querySelector('.spinner').hidden=!load||load.ready;
+  if(status.lastElementChild.textContent!==announcement)status.lastElementChild.textContent=announcement;
+  status.title=error?.message||'';
 }
-function modelNote(){const m=state.models.find(m=>m.id===selectedModel);$('#model-note').innerHTML=m?`${m.loaded?'<span class="pill live">Loaded</span>':'<span class="pill warn">Will load for this run</span>'} &nbsp; ${esc(m.npu??'?')}% NPU · ${fmtSize(m.size)}${m.thinking?.supported?' · reasoning supported':''}`:'No compatible downloaded model. Explore Models to download one.';if(task==='chat'){thinkingControls();chatOptionsStatus();}}
+function modelNote(){const m=state.models.find(m=>m.id===selectedModel);$('#model-note').innerHTML=m?`${m.loaded?'<span class="pill live">Loaded</span>':'<span class="pill warn">Will load for this run</span>'} &nbsp; ${esc(m.npu??'?')}% NPU · ${fmtSize(m.size)}${m.thinking?.supported?' · reasoning supported':''}`:'No compatible downloaded model. Explore Device → Models to download one.';if(task==='chat'){thinkingControls();chatOptionsStatus();}if(task==='speech'){$('#voice-reference').hidden=!voiceCloneModel(m);renderSampleStatus();}}
 function thinkingControls(){
   const mode=$('#thinking-mode'),effort=$('#reasoning-effort');if(!mode||!effort)return;
   const m=state.models.find(m=>m.id===selectedModel),toggle=m?.thinking?.toggleable,levels=m?.reasoningLevels || [];
@@ -336,7 +386,7 @@ function chatOptionsStatus(){
   const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
   searchNotice.classList.toggle('search-enabled',chatOptions.search);
   searchNotice.textContent=chatOptions.search?`With Send, ${provider} gets ${chatOptions.query.trim()?'your separate search query':'this prompt as a search query'} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'Web search is off for this send.';
-  const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),'the Tiiny API key'];
+  const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
   const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
   deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search?'Search results go to Tiiny when used. ':''}Runs save locally.`;
 }
@@ -369,13 +419,53 @@ function bindChatControls(){
 }
 function resizePrompt(){const prompt=$('#prompt');if(prompt){prompt.style.height='auto';prompt.style.height=Math.min(prompt.scrollHeight,108)+'px';}}
 function scrollConversation(){const el=$('#conversation');if(el)el.scrollTop=el.scrollHeight;}
-function renderChat(){const h=$('#chat-history');if(!h)return;h.innerHTML=task==='chat'?chat.map(m=>`<article class="chat-message ${m.role==='user'?'from-user':'from-assistant'}"><strong>${m.role==='user'?'You':'Spindle'}</strong>${m.role==='assistant'?chatDetails(m,'thinking'):''}${m.role==='assistant'?chatMarkdown(m.content):'<div class="output-text">'+esc(typeof m.content==='string'?m.content:'[Image message]')+'</div>'}${m.role==='assistant'?chatDetails(m,'sources'):''}</article>`).join(''):'';if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;}
+function renderChat(){const h=$('#chat-history');if(!h)return;h.innerHTML=task==='chat'?chat.map(m=>`<article class="chat-message ${m.role==='user'?'from-user':'from-assistant'}"><strong>${m.role==='user'?'You':'Spindle'}</strong>${m.vaultSource?'<div class="small muted">Vault · '+esc(m.vaultSource)+'</div>':''}${m.role==='assistant'?chatDetails(m,'thinking'):''}${m.role==='assistant'?chatMarkdown(m.content):'<div class="output-text">'+esc(typeof m.content==='string'?m.content:'[Image message]')+'</div>'}${m.role==='assistant'?chatDetails(m,'sources'):''}</article>`).join(''):'';if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;}
+let statsJob=null;
+function renderChatClock(){
+  const clock=$('[data-chat-time]');
+  if(!clock||statsJob?.id!==currentJob||!statsJob)return;
+  const {status,startedAt,finishedAt}=statsJob;
+  const start=Date.parse(startedAt),end=Date.parse(finishedAt);
+  const seconds=Number.isFinite(start)?Math.max(0,Math.floor(((Number.isFinite(end)?end:Date.now())-start)/1000)):null;
+  const time=seconds==null?'':Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
+  const label=({queued:'Queued',running:'Running',completed:'Completed',failed:'Failed',cancelled:'Stopped'})[status]||status;
+  const text=[label,time].filter(Boolean).join(' ');
+  if(clock.textContent!==text)clock.textContent=text;
+}
+setInterval(renderChatClock,500);
+function renderChatStats(job){
+  const panel=$('#chat-run-stats');
+  if(!panel)return;
+  statsJob=job?.steps?.length===1&&job.steps[0].task==='chat'?job:null;
+  panel.hidden=!statsJob;
+  if(!statsJob)return;
+  const {tokens,percent,ratio,estimated,context,used,rate,cache}=chatRunStats(job,state.models.find(m=>m.id===job.steps[0].model));
+  const meter=panel.querySelector('progress');
+  meter.hidden=ratio==null;
+  if(!meter.hidden){
+    meter.value=Math.min(100,ratio*100);
+    meter.setAttribute('aria-valuetext',`${estimated?'Estimated ':''}${used.toLocaleString()} of ${context.toLocaleString()} tokens, ${percent}`);
+  }
+  panel.querySelector('[data-chat-context]').textContent='Context '+tokens;
+  panel.querySelector('[data-chat-context]').title=estimated?'Estimated from request and response text. Tiiny can report exact usage later.':'Context use and capacity reported by Tiiny';
+  panel.querySelector('[data-chat-percent]').textContent=ratio==null?'':percent;
+  panel.querySelector('[data-chat-rate]').textContent='Speed '+rate;
+  panel.querySelector('[data-chat-cache]').textContent='Cache hit '+cache;
+  panel.querySelector('.spinner').hidden=!['queued','running'].includes(job.status);
+  renderChatClock();
+}
 async function readFile(input,forTask=task){const f=input?.files?.[0];if(!f)return null;if(f.size>40*1024*1024)throw new Error('Files must be under 40 MiB.');if(forTask==='asr')return transcriptionFile(f);return {name:f.name,data:await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(f);})};}
 async function getStep(requireFile=true,tiinyOnly=false){
-  const stepTask=task,model=selectedModel,fileInput=$('#input-file'),sample=sampleInput?.task===stepTask?sampleInput.file:null;
+  const stepTask=task,model=selectedModel,useFile=stepTask!=='speech'||!$('#voice-reference').hidden;
+  const fileInput=useFile?$('#input-file'):null,sample=useFile&&sampleInput?.task===stepTask?sampleInput.file:null;
   if(!model)throw new Error('Choose a downloaded model first.');let params;try{params=JSON.parse($('#params')?.value || '{}');}catch{throw new Error('Advanced settings must be valid JSON.');}
   if(!params||Array.isArray(params)||typeof params!=='object')throw new Error('Advanced settings need a JSON object.');
-  if(stepTask==='speech'&&$('#voice')?.value)params.voice=$('#voice').value;
+  if(stepTask==='speech'){
+    if(sample||fileInput?.files.length){
+      params.ref_text=$('#ref-text').value.trim();
+      if(!params.ref_text)throw new Error('Enter the exact words spoken in the voice reference.');
+    }else if($('#voice').value)params.voice=$('#voice').value;
+  }
   if(stepTask==='music'&&$('#lyrics')?.value)params.lyrics=$('#lyrics').value;
   if(stepTask==='video'){if($('#video-preview')?.checked)params._spindlePreview=true;if($('#seconds')?.value)params.seconds=Number($('#seconds').value);if($('#size')?.value)params.size=$('#size').value;}
   if(stepTask==='chat'){
@@ -383,7 +473,9 @@ async function getStep(requireFile=true,tiinyOnly=false){
     params._spindleThinking=chatOptions.thinking;params._spindleEffort=chatOptions.effort;params._spindleStream=chatOptions.stream;
     params._spindleWebSearch=tiinyOnly?{enabled:false}:{enabled:chatOptions.search,provider:chatOptions.provider,query:chatOptions.query};
   }
-  const documents=$('#documents')?.value.split('\n').filter(Boolean),file=sample || await readFile(fileInput,stepTask);
+  const documents=$('#documents')?.value.split('\n').filter(Boolean);
+  const reference=stepTask==='speech'?fileInput?.files[0]:null;
+  const file=sample || (reference?await transcriptionFile(reference,30):await readFile(fileInput,stepTask));
   if(requireFile&&['asr','ocr','mesh'].includes(stepTask)&&!file)throw new Error('Choose an input file.');
   return {task:stepTask,model,params,file,documents};
 }
@@ -407,6 +499,7 @@ function outputHTML(out,{partial=false}={}) {
 let handled=new Set();
 function renderCurrent(j){
   if(!$('#output'))return;disableSend($('#task-form'),['queued','running'].includes(j.status));$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
+  renderChatStats(j);
   let completedAnswer=false;const conversation=$('#conversation'),follow=conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
   $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.status==='completed';
   const thinkingOpen=[...$('#output').querySelectorAll('[data-chat-panel]')].map(el=>el.open);$('#output').innerHTML=j.outputs.map(out=>outputHTML(out)).join('')+(j.partial?outputHTML(j.partial,{partial:true}):'')+(j.error?recoveryHTML(j.error):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
@@ -423,10 +516,21 @@ function makeImageVideo(j){
   const image=j.outputs.filter(o=>o.task==='image').flatMap(o=>o.assets || []).find(a=>a.mime.startsWith('image/'));
   if(!image)return;studio.adopt(image);page='workflows';show();$('#creative-workflow').open=true;toast('Your saved image is selected. Refine it or make a video.');
 }
-async function poll(){if(polling)return;polling=true;try{const next=await api('/api/runs');const changed=JSON.stringify(next)!==JSON.stringify(runs);const ended=runs.some(r=>r.status==='running')&&!next.some(r=>r.status==='running');runs=next;const busy=runs.find(r=>r.status==='running'||r.status==='queued');if($('#activity-status'))$('#activity-status').textContent=busy?busy.name+' · '+(busy.phase || busy.status):'';if(busy?.phase)$('#resident').textContent=busy.phase;window.dispatchEvent(new CustomEvent('spindle:activity',{detail:!!busy}));window.dispatchEvent(new CustomEvent('spindle:run',{detail:busy?{name:busy.name,status:busy.status,phase:busy.phase,progress:busy.progress}:null}));
+function poll(){
+  return pollPromise??=pollRuns().finally(()=>{pollPromise=null;});
+}
+async function pollRuns(){try{
+  const options={cache:'no-store',headers:runsTag?{'If-None-Match':runsTag}:{}};
+  let response=await fetch('/api/runs',options);
+  if(response.status===403){await fetch('/api/session');response=await fetch('/api/runs',options);}
+  if(response.status===304)return;
+  const next=await response.json();
+  if(!response.ok)throw Error(next.error||'Run history could not be loaded.');
+  const tag=response.headers.get('ETag');
+  const changed=tag?tag!==runsTag:JSON.stringify(next)!==JSON.stringify(runs);
+  runsTag=tag||'';const ended=runs.some(r=>r.status==='running')&&!next.some(r=>r.status==='running');runs=next;const busy=runs.find(r=>r.status==='running'||r.status==='queued');if($('#activity-status'))$('#activity-status').textContent=busy?busy.name+' · '+(busy.phase || busy.status):'';if(busy?.phase)$('#resident').textContent=busy.phase;window.dispatchEvent(new CustomEvent('spindle:activity',{detail:!!busy}));window.dispatchEvent(new CustomEvent('spindle:run',{detail:busy?{name:busy.name,status:busy.status,phase:busy.phase,progress:busy.progress}:null}));
   if(changed&&page==='workbench')renderModelLoad();
-  if(ended){await refresh(false);if(page==='workbench')renderModelLoad();}
-  if(changed){promptDex?.update();if(page==='meeting')meetingDesk?.update();if(page==='dashboard')refreshDashboard();if(page==='workbench'&&currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}if(page==='library')renderRuns();if(page==='workflows')renderWorkflowStatus();}}catch(e){console.warn(e.message);}finally{polling=false;}}
+  if(changed){promptDex?.update();if(page==='meeting')meetingDesk?.update();if(page==='dashboard')refreshDashboard();if(page==='workbench'&&currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}if(page==='library')renderRuns();if(page==='workflows')renderWorkflowStatus();}if(ended){await refresh(false);if(page==='workbench')renderModelLoad();}}catch(e){console.warn(e.message);}}
 function modelsPage(){
   const ms=state.models,installed=ms.filter(m=>m.installed),store=ms.filter(m=>m.available);
   $('#view').innerHTML=heading('YOUR MODEL COLLECTION','Many minds. One shelf.','A live catalog from your device, with availability, inputs, outputs, and NPU requirements.',`<a class="button" href="/catalog.csv" download>Export CSV ↗</a><a class="button quiet" href="/catalog.json" download>JSON</a>`)+
@@ -441,7 +545,7 @@ function renderModels(){
   document.querySelectorAll('.model-action').forEach(b=>b.onclick=()=>modelAction(b));document.querySelectorAll('.detail').forEach(b=>b.onclick=()=>modelDetails(b.dataset.id));
 }
 async function modelAction(b){
-  b.disabled=true;const label=b.textContent;b.textContent='Working…';try{await api('/api/model',{id:b.dataset.id,action:b.dataset.action});toast(b.dataset.action==='download'?'Download requested. Refresh to check its status.':'Model action completed.');await refresh();}catch(e){fail(e);}finally{b.disabled=false;b.textContent=label;}
+  b.disabled=true;const label=b.textContent;b.textContent=({start:'Loading…',stop:'Unloading…',download:'Requesting…'})[b.dataset.action];try{await api('/api/model',{id:b.dataset.id,action:b.dataset.action});toast(b.dataset.action==='download'?'Download requested. Refresh to check its status.':'Model action completed.');await refresh();}catch(e){fail(e);}finally{b.disabled=false;b.textContent=label;}
 }
 function modelDetails(id){const m=state.models.find(m=>m.id===id);$('#model-detail').innerHTML=`<div class="eyebrow">${esc(m.type)}</div><h2>${esc(m.name)}</h2><p class="small muted">${esc(m.id)}</p><div class="section-gap">${[['Inputs',m.input],['Outputs',m.output],['NPU reservation',m.npu+'%'],['Store NPU estimate',m.storeNpu==null?'Not reported':m.storeNpu+'%'],['Disk size',fmtSize(m.size)],['Context window',m.context || 'Not reported'],['Capabilities',[...m.capabilities,...m.supported].join(', ') || 'Not reported'],['Reasoning levels',m.reasoningLevels.join(', ') || 'Not reported'],['Version',m.version || 'Not reported'],['Availability',m.loaded?'Loaded':m.installed?'Downloaded':m.available?'Store':'Custom']].map(([k,v])=>`<div class="metric-row"><span class="muted">${k}</span><span>${esc(v)}</span></div>`).join('')}</div><div class="model-description">${esc(m.description)}</div><p class="help section-gap">Reported by your device. A listed model or capability does not establish that every API option has been tested.</p>`;$('#model-dialog').showModal();}
 const recipes=[
@@ -467,7 +571,9 @@ function workflowPage(){
   bind('#save-workflow','click',async()=>{try{syncSteps();const w=await api('/api/workflows',workflow);workflow.id=w.id;toast('Recipe saved on this computer.');loadSaved();}catch(e){fail(e);}});
   bind('#run-workflow','click',async()=>{try{syncSteps();if(!workflow.steps.length)throw new Error('Add at least one step.');const issues=workflowWarnings(workflow.steps,state.tasks);if(issues.length)throw new Error('Step '+(issues[0].step+1)+': '+issues[0].text);if(workflow.steps.some(s=>s.fileFrom==='input')&&!$('#input-file').files.length)throw new Error('Choose a starting file before running this workflow.');const missing=workflow.steps.filter(s=>!state.models.find(m=>m.id===s.model)?.loaded);if(missing.length&&!$('#switch-models').checked)throw new Error('Load the required models, or enable model switching: '+[...new Set(missing.map(s=>s.model||'(choose a model)'))].join(', '));
     const j=await api('/api/run',{name:workflow.name,input:$('#workflow-input').value,file:await readFile($('#input-file'),workflow.steps[0]?.task),steps:workflow.steps,switchModels:$('#switch-models').checked});currentJob=j.id;toast('Workflow queued. Results will be saved in Library & runs.');poll();}catch(e){fail(e);}});
-  const workshopRoot=document.createElement('div');workshopRoot.id='extra-workshops';$('#creative-workflow').after(workshopRoot);workshops.mount(workshopRoot,runs);const cutRoot=document.createElement('div');$('#creative-workflow').after(cutRoot);roughCut.mount(cutRoot,runs);studio.mount($('#creative-studio'),runs);renderSteps();loadSaved();renderWorkflowStatus();
+  const workshopRoot=document.createElement('div');workshopRoot.id='extra-workshops';$('#creative-workflow').after(workshopRoot);workshops.mount(workshopRoot,runs);const cutRoot=document.createElement('div');$('#creative-workflow').after(cutRoot);roughCut.mount(cutRoot,runs);
+  if(facsimileBook){const bookRoot=document.createElement('div');workshopRoot.after(bookRoot);facsimileBook.mount(bookRoot);}
+  studio.mount($('#creative-studio'),runs);renderSteps();loadSaved();renderWorkflowStatus();
 }
 function renderSteps(){
   $('#steps').innerHTML=workflow.steps.map((s,i)=>`<section class="panel step" data-index="${i}"><div class="step-title"><h3><span class="step-number">${i+1}</span>${esc(state.tasks[s.task].label)} <span class="small muted">→ ${state.tasks[s.task].output}</span></h3><div class="step-tools"><button data-move="${i}:up" aria-label="Move step up">↑</button><button data-move="${i}:down" aria-label="Move step down">↓</button><button data-remove="${i}" aria-label="Remove step">×</button></div></div><div class="field-row"><label class="field"><span>Task</span><select data-step-task="${i}">${taskOptions(s.task)}</select></label><label class="field"><span>Model</span><select data-step-model="${i}">${modelOptions(s.task,s.model)}</select></label></div><label class="field"><span>Instruction / text input</span><textarea data-step-prompt="${i}">${esc(s.prompt)}</textarea></label><div class="template-line">{{input}} = starting text &nbsp; {{previous.text}} = previous result</div><label class="field"><span>File input</span><select data-step-file="${i}">${[['none','No file'],['input','Starting file'],['previous','Previous step’s image or audio']].map(([k,v])=>`<option value="${k}" ${s.fileFrom===k?'selected':''}>${v}</option>`).join('')}</select></label><p class="help step-context">${esc(guides[s.task].output)}</p><details><summary>Step parameters · JSON</summary><textarea data-step-params="${i}">${esc(JSON.stringify(s.params || {},null,2))}</textarea></details></section>`).join('')||'<div class="empty-inline">Choose a recipe or add your first step.</div>';
@@ -480,14 +586,16 @@ function renderSteps(){
 function syncSteps(){workflow.name=$('#workflow-name').value;for(let i=0;i<workflow.steps.length;i++){const s=workflow.steps[i];s.model=$(`[data-step-model="${i}"]`).value;s.prompt=$(`[data-step-prompt="${i}"]`).value;s.fileFrom=$(`[data-step-file="${i}"]`).value;try{s.params=JSON.parse($(`[data-step-params="${i}"]`).value);}catch{throw new Error('Step '+(i+1)+' has invalid JSON parameters.');}}}
 function preflight(){const target=$('#workflow-preflight');if(!target)return;const ids=[...new Set(workflow.steps.map(s=>s.model))];const models=ids.map(id=>state.models.find(m=>m.id===id));const cost=models.reduce((sum,m)=>sum+(m?.npu || 0),0);const warnings=workflowWarnings(workflow.steps,state.tasks);target.innerHTML=workflow.steps.length?`<p class="help">${workflow.steps.length} steps · ${ids.length} distinct models · ${cost}% estimated NPU reservation if resident together</p>${cost>100?'<p class="help error">These models exceed NPU capacity together. Enable model switching to run them one at a time.</p>':''}<div class="step-status">${models.map(m=>`<span class="pill ${m?.loaded?'live':'warn'}">${esc(m?.name || 'Choose a model')}: ${m?.loaded?'ready':'load needed'}</span>`).join('')}</div>${warnings.length?`<div class="workflow-warnings"><strong>Before you run</strong>${warnings.map(w=>`<p>Step ${w.step+1}: ${esc(w.text)}</p>`).join('')}</div>`:''}`:'';}
 async function loadSaved(){try{saved=await api('/api/workflows');if(!$('#saved-recipes'))return;$('#saved-recipes').innerHTML=saved.map(w=>`<button class="recipe" data-saved="${esc(w.id)}"><strong>${esc(w.name)}</strong><small>${w.steps.length} steps</small></button>`).join('')||'<p class="help">Your saved recipes live here.</p>';document.querySelectorAll('[data-saved]').forEach(b=>b.onclick=()=>{workflow=structuredClone(saved.find(w=>w.id===b.dataset.saved));workflowPage();$('#workflow-builder').open=true;});}catch(e){fail(e);}}
-function renderWorkflowStatus(){studio.update(runs);workshops.update(runs);roughCut.update(runs);const el=$('#workflow-status');const j=runs.find(j=>j.id===currentJob);if(el&&j)el.innerHTML=`${esc(j.name)} · ${esc(j.phase || j.status)} · step ${(j.currentStep || 0)+1} of ${j.steps.length}${j.error?'<p class="error">'+esc(j.error)+'</p>':''}`;}
-function libraryPage(){ $('#view').innerHTML=heading('YOUR LOCAL LIBRARY','Keep what you make.','Every run keeps its model, inputs, parameters, and outputs on this computer.')+'<div id="runs"></div>';renderRuns();poll(); }
+function renderWorkflowStatus(){studio.update(runs);workshops.update(runs);roughCut.update(runs);facsimileBook?.update(runs);const el=$('#workflow-status');const j=runs.find(j=>j.id===currentJob);if(el&&j)el.innerHTML=`${esc(j.name)} · ${esc(j.phase || j.status)} · step ${(j.currentStep || 0)+1} of ${j.steps.length}${j.error?'<p class="error">'+esc(j.error)+'</p>':''}`;}
+function libraryPage(){ $('#view').innerHTML=heading('YOUR LOCAL LIBRARY','Keep what you make.','Every run keeps its model, inputs, parameters, and outputs on this computer.')+(librarySelection?'<button type="button" class="button quiet" id="show-all-runs">← All runs</button>':'')+'<div id="runs"></div>';
+  bind('#show-all-runs','click',()=>{librarySelection='';libraryPage();});renderRuns();void poll();
+}
 const runSignatures=new Map();
 function renderRuns(){
   const target=$('#runs');if(!target)return;
   if(!runs.length){target.innerHTML='<div class="panel empty"><div class="empty-icon">▧</div><h3>Your next idea starts the collection.</h3><p>Run a task in the workbench to save your first output.</p></div>';return;}
   if(!target.querySelector('[data-run-id]'))target.innerHTML='';
-  const sorted=[...runs].sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const sorted=runs.filter(run=>!librarySelection||run.id===librarySelection).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
   sorted.forEach((j,index)=>{
     let card=target.querySelector(`[data-run-id="${j.id}"]`);
     const sig=JSON.stringify([j.outputs,j.finalOutput,j.error,j.restoreError,j.persistenceError]);
@@ -506,7 +614,7 @@ function renderRuns(){
 }
 function devicePage(){
   const models=state.models.filter(m=>m.loaded),n=state.npu;
-  $('#view').innerHTML=heading('THE HEART OF YOUR UNIVERSE','Small footprint. Full control.','Live device telemetry, connection health, and real capability checks.')+`<div class="device-grid"><section class="panel"><div class="panel-head"><h2>Your Tiiny</h2><span class="pill live">${state.offline?'Offline':'Connected'}</span></div><div class="panel-body">${[['Loaded models',models.length],['NPU reserved',models.reduce((a,m)=>a+(m.npu || 0),0)+'%'],['NPU activity',n?.devices?.[0]?.util_percent==null?'Unavailable':n.devices[0].util_percent+'%'],['NPU memory',n?.devices?.[0]?Math.round(n.devices[0].mem_used_mb)+' / '+Math.round(n.devices[0].mem_total_mb)+' MB':'Unavailable'],['CPU activity',n?.cpu?.total_percent==null?'Unavailable':n.cpu.total_percent+'%'],['Memory',n?.memory?.usage_percent==null?'Unavailable':n.memory.usage_percent+'%']].map(([k,v])=>`<div class="metric-row"><span class="muted">${k}</span><span>${esc(v)}</span></div>`).join('')}<p class="help section-gap">Reservation is model capacity. Activity is current compute use.</p></div></section><section class="panel"><div class="panel-head"><h2>Built for your own hardware</h2><span class="pill">Spindle 0.5.2</span></div><div class="panel-body"><p class="lead">The complete creative loop, close to home.</p><p class="help section-gap">Inference uses the device endpoint you connect. Optional web search sends the query to your selected provider. Runs and outputs are saved locally. No Spindle cloud account. No external fonts or animation services.</p><div class="actions section-gap"><button class="button" id="open-connection">Connection settings ↗</button><a class="button quiet" href="/catalog.csv" download>Export catalog</a></div><p class="help section-gap">Refresh discovers new store entries and downloaded models automatically. New task types need a new adapter.</p></div></section></div><div class="section-label section-gap"><span>CAPABILITY READINESS</span><span>Real device checks, with recorded evidence.</span></div><div id="readiness" class="verification-grid"></div>`;
+  $('#view').innerHTML=heading('THE HEART OF YOUR UNIVERSE','Small footprint. Full control.','Live device telemetry, connection health, and real capability checks.')+`<div class="device-grid"><section class="panel"><div class="panel-head"><h2>Your Tiiny</h2><span class="pill live">${state.offline?'Offline':'Connected'}</span></div><div class="panel-body">${[['Loaded models',models.length],['NPU reserved',models.reduce((a,m)=>a+(m.npu || 0),0)+'%'],['NPU activity',n?.devices?.[0]?.util_percent==null?'Unavailable':n.devices[0].util_percent+'%'],['NPU memory',n?.devices?.[0]?Math.round(n.devices[0].mem_used_mb)+' / '+Math.round(n.devices[0].mem_total_mb)+' MB':'Unavailable'],['CPU activity',n?.cpu?.total_percent==null?'Unavailable':n.cpu.total_percent+'%'],['Memory',n?.memory?.usage_percent==null?'Unavailable':n.memory.usage_percent+'%']].map(([k,v])=>`<div class="metric-row"><span class="muted">${k}</span><span>${esc(v)}</span></div>`).join('')}<p class="help section-gap">Reservation is model capacity. Activity is current compute use.</p></div></section><section class="panel"><div class="panel-head"><h2>Built for your own hardware</h2><span class="pill">Local helper</span></div><div class="panel-body"><p class="lead">The complete creative loop, close to home.</p><p class="help section-gap">Inference uses the device endpoint you connect. Optional web search sends the query to your selected provider. Runs and outputs are saved locally. No Spindle cloud account. No external fonts or animation services.</p><div class="actions section-gap"><button class="button" id="open-connection">Connection settings ↗</button><a class="button quiet" href="/catalog.csv" download>Export catalog</a></div><p class="help section-gap">Refresh discovers new store entries and downloaded models automatically. New task types need a new adapter.</p></div></section></div><div class="section-label section-gap"><span>CAPABILITY READINESS</span><span>Real device checks, with recorded evidence.</span></div><div id="readiness" class="verification-grid"></div>`;
   $('#readiness').parentElement.querySelector('.device-grid').insertAdjacentHTML('afterend',`<section class="panel section-gap"><div class="panel-head"><h2>Power & recovery</h2></div><div class="panel-body"><p class="help">Wait for device work to finish before restarting or shutting down.</p><div class="actions"><button class="button" id="tiiny-restart">Restart Tiiny</button><button class="button danger" id="tiiny-shutdown">Shut down Tiiny</button></div><label class="checkline"><input type="checkbox" id="tiiny-ac" disabled> Automatically power on when AC power returns</label><p class="help" id="tiiny-power-status" role="status"></p></div></section>`);
   const ac=$('#tiiny-ac'),powerStatus=$('#tiiny-power-status'),restart=$('#tiiny-restart'),shutdown=$('#tiiny-shutdown');
   restart.disabled=shutdown.disabled=!!state.offline;
@@ -523,9 +631,9 @@ function devicePage(){
 }
 function connectionPage(){
   document.body.classList.remove('creating');window.dispatchEvent(new Event('spindle:workspace'));closeNavigation();
-  $('#breadcrumb').textContent='Workspace / Connection';document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('selected',b.dataset.page==='connection'));
   const c=connectionInfo || {};
   $('#view').innerHTML=heading('BRING YOUR OWN INTELLIGENCE','Make the connection.','Your Tiiny. Your key. A whole universe of possibilities.')+`<div class="connection-layout"><section class="panel"><div class="panel-head"><h2>Connect your Tiiny</h2><span class="pill ${c.keyPresent?'live':''}">${esc(c.source || 'New connection')}</span></div><div class="panel-body"><form id="connection-form"><label class="field"><span>Tiiny endpoint</span><input id="endpoint" type="url" placeholder="http://192.0.2.10" value="${esc(c.endpoint)}" required autocomplete="off"><p class="help">Device URL or an OpenAI-compatible base URL, including /v1 if present.</p><div class="privacy-card"><strong>HTTP TRAFFIC IS UNENCRYPTED</strong><p>With an HTTP device URL, the API key, prompts and files travel without TLS. Use a trusted private network or direct connection.</p></div></label><label class="field"><span>API key</span><input id="api-key" type="password" placeholder="${c.keyPresent?'A key is configured. Leave blank to keep it.':'Paste your Tiiny API key'}" autocomplete="off" spellcheck="false"><p class="help">Find it in TiinyOS Settings → API Key. The stored key is never sent back to this page.</p><button class="text-button" type="button" data-guide="connection">First time connecting? A short checklist →</button></label><label class="checkline"><input id="remember-key" type="checkbox" ${c.remembered&&c.source==='Saved in Spindle'?'checked':''}> Remember on this computer</label><p class="help"><strong>SAVING IS NOT ENCRYPTED.</strong> Remembering writes the API key in plaintext to the ignored local data folder. Leave this off for a session-only Spindle connection. Existing CLI or environment credentials are separate.</p><details><summary>Advanced routing</summary><label class="field section-gap"><span>Native multimodal base URL · optional</span><input id="native-endpoint" value="${esc(c.nativeEndpoint)}" placeholder="http://192.0.2.10/v1"></label><label class="field"><span>Management origin · optional</span><input id="management-endpoint" value="${esc(c.managementEndpoint)}" placeholder="http://192.0.2.10"></label><label class="checkline"><input id="host-routing" type="checkbox" ${c.hostRouting!==false?'checked':''}> Use Tiiny virtual-host routing</label></details><div class="actions"><button class="button primary" type="submit" id="save-connection">Connect Tiiny ↗</button><button class="button" type="button" id="test-connection">Test connection</button>${c.keyPresent?'<button class="button quiet" type="button" id="reset-connection">Use CLI / environment</button>':''}</div><div id="connection-result" class="connection-message" role="status"></div></form></div></section><section class="panel connection-art"><span class="giant-spark" aria-hidden="true">✳</span><div class="panel-body"><div class="eyebrow">YOURS, FROM THE FIRST TOKEN.</div><h2>Powerful things<br>happen locally.</h2><p>Spindle runs beside your Tiiny. Your key goes straight to the device through this local server. The animation is generated here, too.</p><div class="hero-tags"><span>◈ Private workspace</span><span>↗ Open by design</span></div></div></section></div>`;
+  renderNavigation();
   const payload=()=>({endpoint:$('#endpoint').value,key:$('#api-key').value,remember:$('#remember-key').checked,nativeEndpoint:$('#native-endpoint').value,managementEndpoint:$('#management-endpoint').value,hostRouting:$('#host-routing').checked});
   const report=(msg,error=false)=>{const e=$('#connection-result');e.textContent=msg;e.classList.toggle('error',error);};
   bind('#endpoint','input',()=>{$('#native-endpoint').value='';$('#management-endpoint').value='';});
@@ -539,20 +647,38 @@ function onboardingHTML(){
 }
 function renderSampleStatus(){
   const slot=$('#sample-status');if(!slot)return;
-  const sample=sampleInput?.task===task?sampleInput:null;
-  const file=$('#input-file')?.files?.[0];
+  const visible=task!=='speech'||!$('#voice-reference').hidden;
+  const sample=visible&&sampleInput?.task===task?sampleInput:null;
+  const file=visible?$('#input-file')?.files?.[0]:null;
   slot.innerHTML=sample?`<span>✧ Sample selected: <strong>${esc(sample.file.name)}</strong></span><button type="button" class="text-button" data-clear-sample>Use my own file</button>`:file?`<span>Attached: <strong>${esc(file.name)}</strong></span><button type="button" class="text-button" data-clear-file>Remove</button>`:'';
+  if(task==='speech'){
+    $('#voice').closest('label').hidden=!!(sample||file);
+    const preview=$('#voice-sample-preview');
+    preview.hidden=sample?.file.name!==voiceReferenceSample.sample;
+    if(preview.hidden&&!preview.paused)preview.pause();
+  }
   if(task==='chat')chatOptionsStatus();
 }
 async function useExample(index){
   const targetTask=task;
   const g=guides[task],example=g?.examples[index];if(!example)return;
   if(page!=='workbench'){page='workbench';show();}
-  exampleUndo={task,values:Object.fromEntries(['prompt','lyrics','documents'].map(k=>[k,$('#'+k)?.value])),sample:sampleInput};
-  if(example.sample){
-    const file=await loadSampleFile(example.sample);
-    if(task!==targetTask||page!=='workbench')return;
-    sampleInput={task,file};
+  let exampleModel;
+  if(example.refText){
+    const models=compatible('speech',true).filter(voiceCloneModel);
+    exampleModel=models.find(model=>model.id===selectedModel)||models[0];
+    if(!exampleModel)throw new Error('Download a speech model that supports voice cloning in Device → Models to try this sample.');
+  }else if(task==='chat'&&example.sample){
+    const models=compatible('chat',true).filter(model=>String(model.input).includes('Image'));
+    if(!models.some(model=>model.id===selectedModel))throw new Error('Choose a downloaded chat model with image input to try this sample.');
+  }
+  const file=example.sample?await loadSampleFile(example.sample):null;
+  if(task!==targetTask||page!=='workbench')return;
+  exampleUndo={task,model:selectedModel,values:Object.fromEntries(['prompt','lyrics','documents','ref-text'].map(k=>[k,$('#'+k)?.value])),sample:sampleInput};
+  if(file)sampleInput={task,file};
+  if(exampleModel){
+    selectedModel=exampleModel.id;$('#model').value=selectedModel;$('#ref-text').value=example.refText;
+    $('#creation-options').open=true;modelNote();renderModelLoad();
   }
   for(const k of ['prompt','lyrics','documents'])if(example[k]!==undefined&&$('#'+k))$('#'+k).value=example[k];
   renderSampleStatus();$('#example-undo').innerHTML='<span class="small muted">Example prepared. Review it, then run when ready.</span> <button type="button" class="text-button" data-undo-example>Undo</button>';
@@ -607,7 +733,7 @@ async function queueDexComparison({title,prompt,models,limit,sampleName,attachme
   void poll();
   return run.id;
 }
-async function openPromptDex(){
+async function openPromptDex(id){
   if(!promptDex){
     try{
       const {createPromptDex}=await import('./prompt-dex.mjs');
@@ -617,20 +743,25 @@ async function openPromptDex(){
       });
     }catch{toast('Restart the Spindle helper, then reload to open PromptDex.');return;}
   }
-  closeNavigation();promptDex.open();
+  closeNavigation();promptDex.open(id);
 }
 function recoveryHTML(message){const tip=recovery(message);return `<aside class="recovery-card"><span class="intro-label">A USEFUL NEXT STEP</span><h3>${esc(tip.title)}</h3><p>${esc(tip.text)}</p><button type="button" class="text-button" data-recovery="${tip.action}">${esc(tip.label)} →</button><details><summary>Original message</summary><pre>${esc(message)}</pre></details></aside>`;}
 function openGuide(tabName){
-  const selected=tabName || (page==='workflows'?'workflows':page==='connection'?'connection':page==='models'||page==='device'||page==='dashboard'?'essentials':'task');
+  const selected=tabName || ({device:'essentials',models:'essentials',security:'privacy'})[page] ||
+    (['workflows','meeting','dashboard','library','connection'].includes(page)?page:'task');
   const dialog=$('#guide-dialog'),g=guides[task];
   const sections=items=>items.map((item,i)=>`<details class="guide-section" ${i===0?'open':''}><summary>${esc(item.title)}</summary><p>${esc(item.text)}</p></details>`).join('');
-  const tabs=[['task','This task'],['start','Start here'],['essentials','Essentials'],['workflows','Workflows'],['connection','Connect'],['privacy','Privacy & limits']];
+  const tabs=[['task','This task'],['start','Start here'],['meeting','Meeting Desk'],['workflows','Workflows'],['dashboard','Dashboard'],['library','Find & reuse'],['essentials','Device & models'],['connection','Connect'],['privacy','Privacy & limits']];
   let body='';
-  if(selected==='task')body=`<span class="guide-category">${icons[task]} ${esc(state?.tasks?.[task]?.label || 'Chat & vision')}</span><h3 class="guide-feature-title">${esc(g.title)}</h3><p class="guide-lead">${esc(g.purpose)}</p><div class="guide-facts"><p><strong>BEST FOR</strong>${esc(g.best)}</p><p><strong>WHAT YOU GET</strong>${esc(g.output)}</p></div><h3>Make it better</h3><ol class="guide-tips">${g.tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ol><div class="guide-note"><strong>Worth knowing</strong><p>${esc(g.watch)}</p></div><h3>A useful starting point</h3><div class="guide-examples">${g.examples.map((e,i)=>`<button class="recipe" data-example="${i}"><strong>${esc(e.label)} ↗</strong><small>Prepare an example ${e.sample?'with a sample file':'prompt'}</small></button>`).join('')}</div><p class="guide-footnote">Examples fill inputs. Nothing runs until you choose to run it.</p><div class="guide-next"><strong>YOUR NEXT MOVE</strong><p>${esc(g.next)}</p></div>`;
+  if(Object.hasOwn(workspaceTips,selected)){
+    const topic=workspaceTips[selected];
+    body=`<h3 class="guide-feature-title">${esc(topic.title)}</h3>${sections(topic.items)}`;
+  }
+  if(selected==='task')body=`<span class="guide-category">${icons[task]} ${esc(state?.tasks?.[task]?.label || 'Chat & vision')}</span><h3 class="guide-feature-title">${esc(g.title)}</h3><p class="guide-lead">${esc(g.purpose)}</p><div class="guide-facts"><p><strong>BEST FOR</strong>${esc(g.best)}</p><p><strong>WHAT YOU GET</strong>${esc(g.output)}</p></div><h3>Make it better</h3><ol class="guide-tips">${g.tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ol><div class="guide-note"><strong>Worth knowing</strong><p>${esc(g.watch)}</p></div><h3>A useful starting point</h3><div class="guide-examples">${g.examples.map((e,i)=>`<button class="recipe" data-example="${i}" ${state?'':'disabled'}><strong>${esc(e.label)} ↗</strong><small>Prepare an example ${e.sample?'with a sample file':'prompt'}</small></button>`).join('')}</div><p class="guide-footnote">${state?'Examples prepare inputs. To generate a result, send or run the example.':'Connect your Tiiny to prepare an example.'}</p><div class="guide-next"><strong>YOUR NEXT MOVE</strong><p>${esc(g.next)}</p></div>`;
   if(selected==='start')body=`<h3 class="guide-feature-title">One small idea is enough.</h3><p class="guide-lead">Make one useful result before exploring all the controls.</p><ol class="guide-tips start-tips"><li><strong>Pick the task.</strong> Chat writes and explains. Images and Video create visuals. Transcribe reads audio; Speech makes it.</li><li><strong>Choose a compatible model.</strong> The workbench lists downloaded models for the task. Model switching can prepare the selected one for you.</li><li><strong>Try an example.</strong> Review the prepared prompt or sample file. Leave advanced settings at {} for the first run.</li><li><strong>Run and give it time.</strong> Preparing a model and generating media can take minutes. The status tells you which stage is happening.</li><li><strong>Keep and refine.</strong> Outputs are saved in Library & runs. Change one part of the input, compare, and save a workflow for repeatable work.</li></ol><div class="actions"><button class="button primary" data-guide="task">Show me examples ↗</button><button class="button quiet" data-show-onboarding>Show start strip</button></div><div class="guide-note"><strong>Keep the surface calm</strong><p>The start strip can be dismissed. This guide stays available from the top bar.</p></div>`;
   if(selected==='essentials')body=`<h3 class="guide-feature-title">A few terms. A lot less guessing.</h3><p class="guide-lead">Open the topic you need.</p>${sections(essentials)}`;
   if(selected==='workflows')body=`<h3 class="guide-feature-title">Connect the result, not just the idea.</h3><p class="guide-lead">Each step has an input and an output. Matching them is the key to a dependable recipe.</p>${sections(workflowTips)}<div class="guide-note"><strong>Two simple patterns</strong><p>Recording → Transcribe → Chat summary → Speech.<br>Image prompt → Images → Video with the previous image as its file input.</p></div>`;
-  if(selected==='privacy')body=`<h3 class="guide-feature-title">Know what stays private.</h3><div class="privacy-card"><strong>HTTP DOES NOT ENCRYPT DEVICE TRAFFIC</strong><p>The API key, prompts and files travel without TLS when your device endpoint uses HTTP. Use a trusted private network or direct connection. HTTPS works only when supported and properly configured on the device.</p></div><div class="privacy-card"><strong>REMEMBERED KEYS ARE PLAINTEXT IN THIS VERSION</strong><p>Leave Remember on this computer off to keep a Spindle connection in server memory until shutdown. Saving it writes the unencrypted key to the ignored local data folder. Native keychain encryption is planned and has not been implemented. Existing CLI or environment credentials are separate.</p></div><div class="privacy-card"><strong>THIS IS A LOCAL, SINGLE-USER APP</strong><p>Keep the helper on your own trusted computer. Do not expose its port to the internet or other users. There is no multi-user login. Docker packaging is not implemented, and macOS/Linux support still needs platform validation.</p></div><h3>Before sharing</h3><p class="guide-lead">Runs, media, model inventories and exports can contain private information. Share only material you reviewed. Keep data/, actual environment files and CLI configuration out of public repositories.</p><h3>Understand the measurements</h3><p class="guide-lead">Spindle tracks its own requests. Tiiny’s ledger can overlap and may omit media. Missing tokens are not zero. Benchmarks vary with settings, cache and other device work.</p><h3>Understand model control</h3><p class="guide-lead">A store listing is not proof that every mode works. Test small inputs first. Model switching unloads models and can affect other clients. Restoration can fail after a disconnect or shutdown.</p>`;
+  if(selected==='privacy')body=`<h3 class="guide-feature-title">Know what stays private.</h3><div class="privacy-card"><strong>HTTP DOES NOT ENCRYPT DEVICE TRAFFIC</strong><p>The API key, prompts and files travel without TLS when your device endpoint uses HTTP. Use a trusted private network or direct connection. HTTPS works only when supported and properly configured on the device.</p></div><div class="privacy-card"><strong>REMEMBERED KEYS ARE PLAINTEXT IN THIS VERSION</strong><p>Leave Remember on this computer off to keep a Spindle connection in server memory until shutdown. Saving it writes the unencrypted key to the ignored local data folder. Native keychain encryption is planned and has not been implemented. Existing CLI or environment credentials are separate.</p></div><div class="privacy-card"><strong>THIS IS A LOCAL, SINGLE-USER APP</strong><p>Keep the helper on your own trusted computer. Do not expose its port to the internet or other users. There is no multi-user login. Docker packaging is not implemented, and macOS/Linux support still needs platform validation.</p></div><h3>Before sharing</h3><p class="guide-lead">Runs, media, model inventories and exports can contain private information. Share only material you reviewed. Keep data/, actual environment files and CLI configuration out of public repositories.</p><h3>Search and share</h3><p class="guide-lead">Search Spindle stays in this browser. Chat web search sends a query to an external provider when enabled. Use Send to Tiiny only for a sensitive message. Vault excerpts go to Tiiny. A reply can quote them and be saved in run history.</p><p class="guide-lead">Device → Security &amp; Privacy offers an optional chat request trace. Review meeting minutes, cut sheets, booklets, and generated HTML before sharing.</p>`;
   if(selected==='connection')body=`<h3 class="guide-feature-title">Your device, one good connection.</h3><ol class="guide-tips start-tips"><li><strong>Find the address.</strong> Copy your Tiiny device address from TiinyOS network settings or the base URL used by your working Tiiny client.</li><li><strong>Find the key.</strong> Copy it from TiinyOS Settings → API Key. Paste it into Spindle’s Connection form.</li><li><strong>Test before connecting.</strong> A successful test confirms the model-list endpoint responds. It does not load or run a model.</li><li><strong>Choose whether to remember it.</strong> Unchecked keeps the Spindle connection in server memory until shutdown. Checked saves it in the local ignored data folder.</li></ol><div class="guide-note"><strong>If the test fails</strong><p>Check power, the USB or network connection, and the endpoint. An authorization error usually needs the current device key. Advanced routing is for owners who know their device uses a different native or management base URL.</p></div><p class="guide-footnote">Existing CLI or environment settings can supply a connection. A saved key is never sent back to the form.</p>`;
   $('#guide-content').innerHTML=`<header class="guide-header"><div><span class="intro-label">A LITTLE GUIDANCE. MORE POSSIBILITY.</span><h2 id="guide-title">The Spindle field guide</h2></div><button class="dialog-close" aria-label="Close field guide" data-close-guide>×</button></header><nav class="guide-tabs" aria-label="Guide sections">${tabs.map(([id,label])=>`<button data-guide="${id}" aria-pressed="${selected===id}">${label}</button>`).join('')}</nav><div class="guide-body">${body}</div>`;
   if(!dialog.open)dialog.showModal();
@@ -639,7 +770,7 @@ function openGuide(tabName){
 document.addEventListener('click',async e=>{
   if(e.target.closest('[data-open-prompt-dex]')){void openPromptDex();return;}
   const del=e.target.closest('[data-delete-asset]');
-  if(del){if(!confirm('Move this output to Spindle’s local trash? The rest of the run stays in the library.'))return;del.disabled=true;try{await api('/api/library/delete',{url:del.dataset.deleteAsset});runs=await api('/api/runs');renderRuns();toast('Item moved to local trash.');}catch(err){fail(err);del.disabled=false;}return;}
+  if(del){if(!confirm('Move this output to Spindle’s local trash? The rest of the run stays in the library.'))return;del.disabled=true;try{await api('/api/library/delete',{url:del.dataset.deleteAsset});runsTag='';await poll();toast('Item moved to local trash.');}catch(err){fail(err);del.disabled=false;}return;}
   const sound=e.target.closest('[data-soundtrack]');if(sound){workshops.adoptVideo(sound.dataset.soundtrack);page='workflows';show();$('#soundtrack-workflow')?.scrollIntoView({block:'start',behavior:'smooth'});return;}
   const guide=e.target.closest('[data-guide]');if(guide){e.preventDefault();openGuide(guide.dataset.guide);return;}
   if(e.target.closest('[data-close-guide]')){$('#guide-dialog').close();return;}
@@ -648,19 +779,55 @@ document.addEventListener('click',async e=>{
   if(e.target.closest('[data-dismiss-onboarding]')){localStorage.setItem('spindle-started','yes');$('#onboarding')?.remove();return;}
   if(e.target.closest('[data-clear-sample]')){sampleInput=null;renderSampleStatus();return;}
   if(e.target.closest('[data-clear-file]')){$('#input-file').value='';renderSampleStatus();return;}
-  if(e.target.closest('[data-undo-example]')&&exampleUndo?.task===task){for(const [k,v]of Object.entries(exampleUndo.values))if($('#'+k)&&v!==undefined)$('#'+k).value=v;sampleInput=exampleUndo.sample;exampleUndo=null;renderSampleStatus();$('#example-undo').innerHTML='';return;}
+  if(e.target.closest('[data-undo-example]')&&exampleUndo?.task===task){for(const [k,v]of Object.entries(exampleUndo.values))if($('#'+k)&&v!==undefined)$('#'+k).value=v;sampleInput=exampleUndo.sample;if(task==='speech'){selectedModel=exampleUndo.model;$('#model').value=selectedModel;modelNote();renderModelLoad();}exampleUndo=null;renderSampleStatus();resizePrompt();$('#example-undo').innerHTML='';return;}
   const action=e.target.closest('[data-recovery]');if(action){if(action.dataset.recovery==='guide')openGuide();else{page=action.dataset.recovery;show();}}
 });
 bind('#open-guide','click',()=>openGuide());$('#open-guide').disabled=false;
 
 function closeNavigation(){if($('#navigation-dialog').open)$('#navigation-dialog').close();}
-bind('#open-navigation','click',()=>{const slot=$('#mobile-navigation');slot.innerHTML='<nav aria-label="Main navigation">'+$('#nav').innerHTML+'</nav><p class="mobile-connection">'+esc($('#connection').textContent)+'</p>';slot.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;show();});$('#navigation-dialog').showModal();});
+bind('#open-navigation','click',()=>{const slot=$('#mobile-navigation');slot.innerHTML='<nav aria-label="Main navigation">'+$('#nav').innerHTML+'</nav><p class="mobile-connection">'+esc($('#connection').textContent)+'</p>';slot.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;librarySelection='';show();});$('#navigation-dialog').showModal();});
 bind('#close-navigation','click',closeNavigation);
 bind('#navigation-dialog','click',e=>{if(e.target===$('#navigation-dialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeNavigation();}});
 const fitViewport=()=>document.documentElement.style.setProperty('--app-height',(window.visualViewport?.height || window.innerHeight)+'px');
 window.visualViewport?.addEventListener('resize',fitViewport);window.addEventListener('resize',fitViewport);fitViewport();
-document.querySelectorAll('#nav [data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;show();});
+document.querySelectorAll('#nav [data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;librarySelection='';show();});
 bind('#refresh','click',()=>refresh());bind('#close-dialog','click',()=>$('#model-dialog').close());
+let searchPrompts=[];
+globalSearch?.mountGlobalSearch({
+  getPages:()=>searchPages,
+  getItems:()=>globalSearch.searchItems({pages:searchPages,runs,workflows:saved,prompts:searchPrompts,models:state?.models}),
+  onOpen:refreshSearch=>{
+    void Promise.allSettled([
+      poll(),api('/api/workflows').then(workflows=>{saved=workflows;}),
+      import('./prompt-dex.mjs').then(module=>{searchPrompts=module.searchPromptDex(chatStorage);}),
+    ]).then(refreshSearch);
+  },
+  async onChoose(result){
+    if(result.type==='prompt'||result.id==='prompt-dex'&&result.type==='page'){await openPromptDex(result.type==='prompt'?result.id:undefined);return;}
+    librarySelection='';
+    if(result.type==='page'){
+      if(result.id!==page){page=result.id;show();}
+      else if(page==='library')libraryPage();
+      return;
+    }
+    if(result.type==='meeting'){
+      page='meeting';show();await openMeetingDesk(result);return;
+    }
+    if(result.type==='model'){
+      if(state?.models.some(model=>model.id===result.id)){page='models';show();modelDetails(result.id);}
+      return;
+    }
+    if(result.type==='workflow'){
+      const match=saved.find(item=>item.id===result.id);
+      if(state&&match){workflow=structuredClone(match);page='workflows';show();$('#workflow-builder').open=true;$('#workflow-name').focus();}
+      else toast('Open Connection to load the workflow editor.');
+      return;
+    }
+    librarySelection=result.id;page='library';show();
+    const card=$('#runs .run-card');
+    if(card){card.tabIndex=-1;card.focus({preventScroll:true});card.scrollIntoView({block:'start'});}
+  },
+});
 const requestedMuseum=new URL(location.href).searchParams.get('museum');
 if(/^[a-f0-9-]{36}\.html$/.test(requestedMuseum || ''))location.replace('/api/museum/preview/'+requestedMuseum);
 else{

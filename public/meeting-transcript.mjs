@@ -1,0 +1,26 @@
+export const meetingClock=seconds=>[Math.floor(seconds/60),Math.floor(seconds%60)].map(value=>String(value).padStart(2,'0')).join(':');
+
+export function meetingLines(run){
+  if(!run?.meeting)return [];
+  return (run.outputs||[]).flatMap((output,index)=>{
+    const {chunkSeconds,duration}=run.meeting;
+    const offset=index*chunkSeconds,length=Math.min(chunkSeconds,duration-offset);
+    const segments=output.json?.segments??output.json?.data?.segments??output.json?.result?.segments;
+    const timed=Array.isArray(segments)?segments.filter(row=>Number.isFinite(row?.start)&&row.start>=0&&row.start<length&&typeof row.text==='string'&&row.text.trim()):[];
+    if(timed.length){
+      const voices=new Map();
+      return timed.map(row=>{
+        const id=row.speaker??row.speaker_id;
+        let speaker;
+        if((typeof id==='string'&&id.trim()&&id.length<=100)||Number.isSafeInteger(id)){
+          const key=String(id).trim();
+          if(!voices.has(key))voices.set(key,voices.size+1);
+          speaker=(duration>chunkSeconds?`Section ${index+1}, voice `:'Voice ')+voices.get(key);
+        }
+        return {at:offset+row.start,text:row.text.trim(),approximate:false,...(speaker?{speaker}:{})};
+      });
+    }
+    const text=typeof output.text==='string'?output.text.trim():'';
+    return text?[{at:offset,text,approximate:true}]:[];
+  });
+}
