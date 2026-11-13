@@ -19,7 +19,7 @@ import {meetingRecording,meetingChunk,meetingChunkSeconds,meetingSummaryStep} fr
 import {meetingLines} from './public/meeting-transcript.mjs';
 import {packetRows} from './public/meeting-packet.mjs';
 import {creativeModels,creativeModel,requireCreativeModel,imageRecipe,enhancerInstruction,enhancedPrompt,filmDuration} from './creative.mjs';
-import {filmTools,planFilm,filmSegmentParams,normalizeClip,lastFrame,stitchFilm} from './film.mjs';
+import {filmTools,planFilm,filmSegmentParams,normalizeClip,lastFrame,stitchFilm,NATIVE_CLIP_MAX_SECONDS,nativeClipToolsNote} from './film.mjs';
 import {fetchMuseumSource,museumProjects,basicExhibits,museumCurationPrompt,curatedExhibits,museumHTML} from './museum.mjs';
 import {refreshMuseumProjects} from './museum-source.mjs';
 import {museumBrief,museumDesign,museumMeshParams,museumMaterialPrompt,museumMuralPrompt,museumSoundscapePrompt,sculptureReferencePrompt} from './public/museum-recipes.mjs';
@@ -460,8 +460,14 @@ async function enqueueRun(b,vaultReference){
 }
 async function processFilmClip(job,index,signal){
   const out=job.outputs[index];if(out.normalized)return;
-  job.film.stage='processing';job.phase='Saving segment '+(index+1)+' of '+job.steps.length;await saveJobs();
   const source=out.sourceAssets || out.assets,clip=source.find(a=>a.mime.startsWith('video/'));
+  if(job.film.nativeClip){
+    const frames=clip?.metadata?.frames;
+    if(clip?.mime==='video/mp4'&&!(frames>0&&frames<job.film.plan.totalFrames))return;
+    out.needsRegeneration=true;
+    throw new Error(clip?.mime==='video/mp4'?'Tiiny returned too few frames. The original clip is saved.':'Tiiny did not return an MP4 clip.');
+  }
+  job.film.stage='processing';job.phase='Saving segment '+(index+1)+' of '+job.steps.length;await saveJobs();
   if(!clip)throw new Error('The segment completed without a video artifact.');
   let processed;try{processed=await normalizeClip(path.join(DATA,'assets'),clip.url,job.film.plan,index,{signal});}
   catch(e){if(e.code==='FILM_SHORT_CLIP'){out.needsRegeneration=true;await saveJobs();}throw e;}
@@ -537,8 +543,8 @@ async function startQueue(){
         const model=job.steps[0].model,info=await remoteJSON('/v1/video/info?model='+encodeURIComponent(model),{signal:controller.signal});
         job.film.runtimeInfo=info;await saveJobs();
         const source=await imageSource(job.film.sourceAsset),meta=mediaFromBuffer(parseDataUrl(source).buffer,parseDataUrl(source).mime);
-        job.film.plan=planFilm(info,job.film.seconds,meta);
-        const plan=job.film.plan;
+        const plan=planFilm(info,job.film.seconds,meta,{nativeClip:job.film.nativeClip});
+        job.film.plan=plan;
         job.steps=plan.segments.map((s,i)=>({task:'video',model,prompt:job.input+'\n'+(i?'Continue directly from the supplied final frame. Maintain the same subjects, appearance, lighting and camera movement; keep the action moving forward.':'Begin the movement from the supplied image.')+' Segment '+(i+1)+' of '+plan.segments.length+'.',fileFrom:i?'last-frame':'source',params:filmSegmentParams(plan,s)}));
         await saveJobs();
       }
@@ -598,7 +604,12 @@ async function startQueue(){
       }catch(e){try{if(!job.recoveringNative)await metricStore.add(createMetric({job:{...job,status:controller.signal.aborted?'cancelled':'failed'},step,index:i,startedAt,finishedAt:new Date().toISOString(),executionMs:performance.now()-started,prepareMs,resources:summarizeResources(samples),connectionId:job.connectionId,model:cached.models.find(m=>m.id===s.model)}));}catch{}throw e;}
       finally{clearInterval(sampler);}
     }
-    if(job.film){
+    if(job.film?.nativeClip){
+      controller.signal.throwIfAborted();
+      const clip=job.outputs[0].assets.find(a=>a.mime==='video/mp4');
+      job.finalOutput={task:'video',text:'Original Tiiny clip saved.',assets:[clip]};
+      job.film.stage='complete';
+    }else if(job.film){
       controller.signal.throwIfAborted();job.film.stage='stitching';job.phase='Stitching '+job.outputs.length+' saved segments';job.progress=null;await saveJobs();
       const finished=await stitchFilm(path.join(DATA,'assets'),job.outputs.map(o=>o.assets.find(a=>a.mime.startsWith('video/'))),job.film.plan,{signal:controller.signal});
       job.finalOutput={task:'video',text:job.film.seconds+'-second film assembled from '+job.outputs.length+' segments.',assets:[finished]};
@@ -1120,7 +1131,10 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,redactJob(j),202);void startQueue();return;
     }
-    if(p==='/api/studio/tools'&&req.method==='GET'){send(res,await filmTools());return;}
+    if(p==='/api/studio/tools'&&req.method==='GET'){
+      const tools=await filmTools();
+      send(res,tools.available?tools:{available:false,nativeClipMaxSeconds:NATIVE_CLIP_MAX_SECONDS,note:nativeClipToolsNote});return;
+    }
     if(p.startsWith('/api/studio/')&&req.method==='POST'){
       if(!cached)await inventory();
       const b=await jsonBody(req),models=cached.models;
@@ -1135,10 +1149,11 @@ const server=http.createServer(async(req,res)=>{
       }else if(p==='/api/studio/film'){
         const seconds=filmDuration(b.seconds,b.acknowledged),model=choose('video','video');requireCreativeModel(models,model,'video');
         const source=await imageSource(b.sourceAsset,b.file);if(!source)throw new Error('Choose or create a starting image before making a film.');
-        const tools=await filmTools();if(!tools.available)throw new Error(tools.note);
+        const tools=await filmTools(),nativeClip=!tools.available;
+        if(nativeClip&&seconds>NATIVE_CLIP_MAX_SECONDS)throw new Error(nativeClipToolsNote);
         const parsed=parseDataUrl(source),sourceAsset=b.sourceAsset || (await asset(parsed.buffer,parsed.mime,'Film starting image')).url;
         const prompt=typeof b.prompt==='string'&&b.prompt.trim()?b.prompt.trim():'Animate the scene with gentle, natural movement.';
-        j=await enqueueRun({name:'Image → film · '+seconds+'s',input:prompt,steps:[{task:'video',model,prompt,params:{}}],switchModels:b.switchModels===true,studio:{kind:'film'},film:{seconds,sourceAsset,longRunAcknowledged:seconds>30,stage:'preparing'}});
+        j=await enqueueRun({name:(nativeClip?'Image → video · ':'Image → film · ')+seconds+'s',input:prompt,steps:[{task:'video',model,prompt,params:{}}],switchModels:b.switchModels===true,studio:{kind:'film'},film:{seconds,sourceAsset,...(nativeClip?{nativeClip}:{}),longRunAcknowledged:seconds>30,stage:'preparing'}});
       }else if(p==='/api/studio/resume'){
         const old=jobs.find(x=>x.id===b.id);
         if(!old?.film||!['failed','cancelled','interrupted'].includes(old.status))throw new Error('Choose a stopped or interrupted film to resume.');
@@ -1146,7 +1161,7 @@ const server=http.createServer(async(req,res)=>{
         if(old.connectionId!==connectionHash(await config()))throw new Error('Reconnect the original Tiiny before resuming this film.');
         for(const step of old.steps)requireCreativeModel(models,step.model,'video');
         await imageSource(old.film.sourceAsset);
-        const tools=await filmTools();if(!tools.available)throw new Error(tools.note);
+        if(!old.film.nativeClip){const tools=await filmTools();if(!tools.available)throw new Error(tools.note);}
         if(old.remote?.task==='video'){
           let retained=null;try{const value=await remoteJSON('/v1/videos/'+encodeURIComponent(old.remote.id),{timeout:15000});retained=value.data || value;}catch(e){if(!e.message.startsWith('Tiiny 404:'))throw e;}
           if(retained&&!['completed','finished','failed','error','cancelled','canceled'].includes(retained.status))throw new Error('The original segment is still running on Tiiny. Let it finish before resuming; Spindle will recover its result instead of submitting a duplicate.');

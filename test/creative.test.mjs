@@ -42,6 +42,12 @@ test('film planning uses runtime frame counts, preserves exact total duration, a
   assert.throws(()=>planFilm({...info,family:'other'},15),/minimax_h3/);
   assert.throws(()=>planFilm({...info,canvases:[]},15),/canvas/);
 });
+test('one native clip needs no boundary frame and respects the reported clip limit',()=>{
+  const options={nativeClip:true};
+  const plan=planFilm({...info,frame_options:[17,120]},5,{},options);
+  assert.deepEqual(plan.segments,[{frames:120,outputFrames:120,skip:0,seconds:5}]);
+  assert.throws(()=>planFilm({...info,frame_options:[17,73]},5,{},options),/Try a shorter duration/);
+});
 test('Tiiny H3 runtime without a frame-count list uses duration requests and keeps three five-second contributions',()=>{
   // Synthetic capability report with the field shape observed on Tiiny H3:
   // no frame_options or default_frames, and an empty buckets array.
@@ -163,4 +169,70 @@ test('studio routes pass enhanced text and real image references, chain film fra
     const disk=await fs.readFile(path.join(data,'runs.json'),'utf8');assert.ok(!disk.includes('fabricated-studio-key'));
     const history=await get('/api/runs');assert.ok(history.find(j=>j.id===complete.id).finalOutput);assert.ok(history.every(j=>!j.file));
   }finally{await stop();await new Promise(resolve=>device.close(resolve));await clean(directory);}
+});
+
+test('studio saves a native clip and rejects long films when media tools are missing',async()=>{
+  const directory=await temp(),data=path.join(directory,'data');
+  const png=await fs.readFile(path.join(root,'fixtures','star.png'));
+  // Synthetic MP4 response used to check that the helper preserves Tiiny's bytes.
+  const original=Buffer.from('000000106674797069736f6d00000000','hex');
+  const model={id:creativeModels.video,type:'Text-to-Video',input:'Text,Image'};
+  let videoRequests=0,reference,frames;
+  const device=http.createServer(async(req,res)=>{
+    const route=new URL(req.url,'http://fixture').pathname;
+    const json=value=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));};
+    if(['/api/v1/models/online_models','/api/v1/models/','/v1/models'].includes(route))return json({data:[model]});
+    if(route==='/api/v1/npu/status')return json({devices:[]});
+    if(route==='/v1/video/info')return json(info);
+    if(route==='/v1/videos'&&req.method==='POST'){
+      const parts=[];for await(const chunk of req)parts.push(chunk);
+      const form=await new Response(Buffer.concat(parts),{headers:{'Content-Type':req.headers['content-type']}}).formData();
+      reference=Buffer.from(await form.get('input_reference').arrayBuffer());
+      frames=Number(form.get('frames'));videoRequests++;
+      return json({id:'native-clip',status:'completed'});
+    }
+    if(route==='/v1/videos/native-clip/content'){res.setHeader('Content-Type','video/mp4');res.end(original);return;}
+    res.statusCode=404;json({error:'Fixture route unavailable'});
+  });
+  await new Promise(resolve=>device.listen(0,'127.0.0.1',resolve));
+  const portServer=http.createServer();await new Promise(resolve=>portServer.listen(0,'127.0.0.1',resolve));
+  const port=portServer.address().port;await new Promise(resolve=>portServer.close(resolve));
+  const base='http://127.0.0.1:'+port,missing=path.join(directory,'missing-media-tool');
+  const child=spawn(process.execPath,['server.mjs'],{cwd:root,windowsHide:true,
+    env:{...process.env,SPINDLE_PORT:String(port),SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(directory,'no-config.json'),
+      TIINY_HOST:'http://127.0.0.1:'+device.address().port,TIINY_KEY:'fixture-clip-key',SPINDLE_FFMPEG:missing,SPINDLE_FFPROBE:missing},
+    stdio:['ignore','ignore','pipe']});
+  let log='';child.stderr.on('data',chunk=>{log+=chunk;});
+  try{
+    let cookie;
+    for(let i=0;i<100&&!cookie;i++){
+      try{const response=await fetch(base);if(response.ok)cookie=response.headers.get('set-cookie').split(';')[0];}catch{}
+      if(!cookie)await pause(30);
+    }
+    assert.ok(cookie,log);
+    const get=p=>fetch(base+p,{headers:{cookie}});
+    const file={name:'source.png',data:'data:image/png;base64,'+png.toString('base64')};
+    const make=seconds=>fetch(base+'/api/studio/film',{method:'POST',headers:{cookie,'Content-Type':'application/json'},body:JSON.stringify({seconds,file})});
+    const tools=await(await get('/api/studio/tools')).json();
+    assert.equal(tools.available,false);assert.equal(tools.nativeClipMaxSeconds,5);
+    const long=await make(6);assert.equal(long.status,400);assert.match((await long.json()).error,/FFmpeg and FFprobe/);
+    assert.equal(videoRequests,0);
+    const request=await make(5);assert.equal(request.status,202);
+    const {id}=await request.json();let job;
+    for(let i=0;i<100;i++){
+      job=(await(await get('/api/runs')).json()).find(j=>j.id===id);
+      if(['completed','failed'].includes(job?.status))break;
+      await pause(30);
+    }
+    assert.equal(job.status,'completed',job.error);
+    assert.equal(job.film.nativeClip,true);assert.equal(videoRequests,1);assert.equal(frames,124);
+    assert.deepEqual(reference,png);
+    assert.equal(job.finalOutput.assets[0].url,job.outputs[0].assets[0].url);
+    const result=await get(job.finalOutput.assets[0].url);
+    assert.equal(result.headers.get('Content-Type'),'video/mp4');
+    assert.deepEqual(Buffer.from(await result.arrayBuffer()),original);
+  }finally{
+    if(child.exitCode===null)await new Promise(resolve=>{child.once('exit',resolve);child.kill();});
+    await new Promise(resolve=>device.close(resolve));await clean(directory);
+  }
 });

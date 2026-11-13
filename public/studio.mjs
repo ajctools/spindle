@@ -3,8 +3,10 @@ const defaults={text:'Qwen/Qwen-Image-2.1-PE-T2I',edit:'Qwen/Qwen-Image-2.1-PE-I
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const imageOf=j=>j?.outputs?.filter(o=>o.task==='image').flatMap(o=>o.assets || []).find(a=>a.mime.startsWith('image/'));
 export function createStudio({api,getState,outputHTML,onQueued,toast}){
-  let root=null,currentId=null,sourceAsset=null,file=null,draft='',motion='',seconds=15,switchModels=true,acknowledged=false,tools=null,lastRuns=[],signature='',finished=new Set(),choices={};
+  let root=null,currentId=null,sourceAsset=null,file=null,draft='',motion='',seconds=15,durationEdited=false,switchModels=true,acknowledged=false,tools=null,lastRuns=[],signature='',finished=new Set(),choices={};
   const $=s=>root?.querySelector(s),busy=j=>j&&['queued','running'].includes(j.status);
+  const maxSeconds=()=>tools?.nativeClipMaxSeconds || 60;
+  const validDuration=()=>Number.isInteger(seconds)&&seconds>=1&&seconds<=maxSeconds();
   function selected(key){
     if(choices[key])return choices[key];
     const task=['text','edit'].includes(key)?'chat':key,models=getState()?.models || [];
@@ -23,7 +25,7 @@ export function createStudio({api,getState,outputHTML,onQueued,toast}){
     root.innerHTML=`<section class="panel creative-studio" aria-labelledby="studio-title"><div class="panel-head"><div><div class="eyebrow">BUILT-IN WORKFLOW</div><h2 id="studio-title">Idea → image → film</h2></div><span class="pill">Create · refine · animate</span></div><div class="panel-body"><p class="lead">Start with a phrase or an image. Refine the picture, then bring it into motion.</p><div class="studio-grid section-gap"><div><label class="field"><span id="studio-prompt-label">Your image idea</span><textarea id="studio-prompt" rows="4" placeholder="A tiny museum hidden inside an old lighthouse…">${esc(draft)}</textarea></label><label class="field"><span>Starting image · optional</span><input id="studio-file" type="file" accept="image/png,image/jpeg,image/webp"></label><div id="studio-source"></div><div class="actions"><button class="button primary" id="studio-create">Create image</button><button class="button quiet" id="studio-clear">Start a new image</button></div><p class="help" id="studio-path"></p></div><div><label class="field"><span>Movement / scene direction</span><textarea id="studio-motion" rows="4" placeholder="The camera moves slowly toward the lighthouse as the light sweeps across the sea…">${esc(motion)}</textarea></label><label class="field"><span>Final video length · 1–60 seconds</span><input id="studio-seconds" type="number" min="1" max="60" step="1" value="${seconds}"></label><p class="help" id="studio-length"></p><div id="studio-long-warning" class="studio-warning" ${seconds>30?'':'hidden'}><strong>This is a long device workload.</strong><p>More than 30 seconds of video can take a very long time and may fail. Each segment depends on the one before it. Completed clips are kept so you can resume.</p><label class="checkline"><input id="studio-acknowledge" type="checkbox" ${acknowledged?'checked':''}> I understand this may take a long time and may fail.</label></div><button class="button primary" id="studio-film">Make video</button><p class="help" id="studio-tools">Checking local video tools…</p><p class="help">Each new clip starts from the previous clip’s last frame. Appearance, motion, and audio may change at joins.</p></div></div><details class="section-gap"><summary>Workflow options · models and switching</summary><div class="studio-grid section-gap"><div>${modelSelect('text','Phrase → enhanced image prompt')}${modelSelect('edit','Image + instruction → enhanced edit')}</div><div>${modelSelect('image','Image generation and editing')}${modelSelect('video','Image → video')}</div></div><label class="checkline"><input id="studio-switch" type="checkbox" ${switchModels?'checked':''}> Switch models for this workflow, then restore my loaded models</label><p class="help">Switching can affect other clients. Use an idle device; restoration can fail after a disconnect.</p></details><p class="help privacy-inline">This workflow uses local inference with web search off. Drafts stay in this tab’s memory; runs, film reference images, and outputs are saved locally.</p><div id="studio-message" role="alert"></div><div id="studio-results" aria-live="polite"></div><div id="studio-history" class="studio-history"></div></div></section>`;
     $('#studio-prompt').oninput=e=>{draft=e.target.value;};
     $('#studio-motion').oninput=e=>{motion=e.target.value;};
-    $('#studio-seconds').oninput=e=>{seconds=Number(e.target.value);acknowledged=false;$('#studio-acknowledge').checked=false;lengthNotice();};
+    $('#studio-seconds').oninput=e=>{seconds=Number(e.target.value);durationEdited=true;acknowledged=false;$('#studio-acknowledge').checked=false;lengthNotice();};
     $('#studio-acknowledge').onchange=e=>{acknowledged=e.target.checked;};
     $('#studio-switch').onchange=e=>{switchModels=e.target.checked;};
     root.querySelectorAll('[data-studio-model]').forEach(el=>el.onchange=()=>{choices[el.dataset.studioModel]=el.value;sourceNotice();});
@@ -39,13 +41,27 @@ export function createStudio({api,getState,outputHTML,onQueued,toast}){
     $('#studio-clear').onclick=()=>{sourceAsset=null;file=null;draft='';$('#studio-file').value='';$('#studio-prompt').value='';sourceNotice();};
     $('#studio-create').onclick=()=>run('image');$('#studio-film').onclick=()=>run('film');
     sourceNotice();lengthNotice();update(runs);
-    const current=root;
-    api('/api/studio/tools').then(value=>{tools=value;if(root===current&&root.isConnected){$('#studio-tools').textContent=value.available?'Local video tools ready. Segment lengths are read from the loaded model.':value.note;controls();}}).catch(error=>{if(root===current&&root.isConnected){$('#studio-tools').textContent=error.message;}});
+    const current=$('#studio-tools');
+    api('/api/studio/tools').then(value=>{
+      if(!current.isConnected)return;
+      tools=value;
+      if(!durationEdited)seconds=Math.min(15,maxSeconds());
+      $('#studio-seconds').value=seconds;
+      current.textContent=value.available?'Local video tools ready. Segment lengths are read from the loaded model.':value.note;
+      lengthNotice();
+    }).catch(error=>{if(current.isConnected)current.textContent=error.message;});
   }
   function message(error){if($('#studio-message'))$('#studio-message').textContent=error.message || String(error);}
   function lengthNotice(){
-    $('#studio-long-warning').hidden=!(seconds>30);
-    $('#studio-length').textContent=Number.isInteger(seconds)&&seconds>=1&&seconds<=60?`${seconds}s final video · aims for ${Math.ceil(seconds/5)} clips of up to 5s; actual segments follow the device’s supported frame counts.`:'Choose a whole number from 1 to 60 seconds.';
+    const input=$('#studio-seconds'),nativeClip=!!tools?.nativeClipMaxSeconds;
+    input.max=maxSeconds();
+    input.closest('label').firstElementChild.textContent=`${nativeClip?'Clip length':'Final video length'} · 1–${input.max} seconds`;
+    $('#studio-tools').nextElementSibling.hidden=nativeClip;
+    $('#studio-long-warning').hidden=!(validDuration()&&seconds>30);
+    $('#studio-length').textContent=!validDuration()?`Choose a whole number from 1 to ${input.max} seconds.`:
+      nativeClip?`${seconds}s target · saves Tiiny’s original clip.`:
+      `${seconds}s final video · aims for ${Math.ceil(seconds/5)} clips of up to 5s; actual segments follow the device’s supported frame counts.`;
+    controls();
   }
   function sourceNotice(){
     const has=!!(sourceAsset||file);
@@ -60,17 +76,17 @@ export function createStudio({api,getState,outputHTML,onQueued,toast}){
     const running=busy(lastRuns.find(j=>j.id===currentId));
     for(const id of ['studio-create','studio-clear','studio-file','studio-prompt','studio-motion','studio-seconds','studio-switch','studio-acknowledge'])if($('#'+id))$('#'+id).disabled=running;
     root?.querySelectorAll('[data-studio-model]').forEach(el=>{el.disabled=running;});
-    if($('#studio-film'))$('#studio-film').disabled=running||!(sourceAsset||file)||tools?.available!==true;
+    if($('#studio-film'))$('#studio-film').disabled=running||!(sourceAsset||file)||!validDuration()||!(tools?.available||tools?.nativeClipMaxSeconds);
   }
   async function run(kind){
     if($('#studio-message'))$('#studio-message').textContent='';
     const button=$('#studio-'+(kind==='image'?'create':'film'));button.disabled=true;
     try{
       if(kind==='image'&&!draft.trim())throw new Error(sourceAsset||file?'Describe the change you want.':'Enter an image idea.');
-      if(kind==='film'&&(!Number.isInteger(seconds)||seconds<1||seconds>60))throw new Error('Choose a whole-number duration from 1 to 60 seconds.');
+      if(kind==='film'&&!validDuration())throw new Error(`Choose a whole number from 1 to ${maxSeconds()} seconds.`);
       if(kind==='film'&&seconds>30&&!acknowledged)throw new Error('Read and acknowledge the long-run warning before continuing.');
       const job=await api('/api/studio/'+kind,{prompt:kind==='image'?draft:motion,sourceAsset,file:sourceAsset?undefined:file,text:selected('text'),edit:selected('edit'),image:selected('image'),video:selected('video'),seconds,acknowledged,switchModels});
-      currentId=job.id;signature='';lastRuns=[job,...lastRuns];onQueued(job);update(lastRuns);toast(kind==='image'?'Image workflow queued.':'Film queued. Completed segments will be saved as it runs.');
+      currentId=job.id;signature='';lastRuns=[job,...lastRuns];onQueued(job);update(lastRuns);toast(kind==='image'?'Image workflow queued.':job.film?.nativeClip?'Video clip queued.':'Film queued. Completed segments will be saved as it runs.');
     }catch(error){message(error);}finally{controls();}
   }
   function update(runs){

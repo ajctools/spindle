@@ -5,6 +5,8 @@ import {randomUUID} from 'node:crypto';
 
 const ffmpeg=()=>process.env.SPINDLE_FFMPEG || 'ffmpeg';
 const ffprobe=()=>process.env.SPINDLE_FFPROBE || 'ffprobe';
+export const NATIVE_CLIP_MAX_SECONDS=5;
+export const nativeClipToolsNote='Request one Tiiny clip of 1–5 seconds. Its actual length depends on the model. Longer films and exact trimming need FFmpeg and FFprobe on the helper.';
 export async function mediaCommand(command,args,{signal,timeout=120000}={}){
   const combined=AbortSignal.any([AbortSignal.timeout(timeout),...(signal?[signal]:[])]);
   combined.throwIfAborted();
@@ -24,7 +26,7 @@ export async function filmTools(){
 // Prefer reported native frame counts. Some Tiiny H3 firmware omits them; in
 // that case use the gateway's documented seconds interface, not an invented
 // model-specific frame lattice. The gateway adds its reference boundary frame.
-export function planFilm(info,seconds,source={}){
+export function planFilm(info,seconds,source={},{nativeClip=false}={}){
   if(info.family!=='minimax_h3')throw new Error('This workflow needs a runtime reporting the minimax_h3 video family.');
   const fps=Number(info.fps);
   if(!Number.isFinite(fps)||fps<1||fps>120)throw new Error('The video runtime did not report a usable frame rate.');
@@ -42,7 +44,9 @@ export function planFilm(info,seconds,source={}){
   const stepOptions=(info.step_options || []).filter(n=>Number.isSafeInteger(n)&&n>0);
   const steps=stepOptions.includes(info.default_steps)?info.default_steps:stepOptions[0] || (Number.isSafeInteger(info.default_steps)&&info.default_steps>0?info.default_steps:null);
   if(!steps)throw new Error('The video runtime did not report a supported generation step count.');
-  const chunk=mode==='frames'?Math.min(Math.round(5*fps),options.at(-1)-1):Math.round(5*fps),totalFrames=Math.round(seconds*fps),segments=[];
+  const maxClipFrames=Math.round(NATIVE_CLIP_MAX_SECONDS*fps),totalFrames=Math.round(seconds*fps),segments=[];
+  const chunk=mode==='frames'?Math.min(maxClipFrames,options.at(-1)-(nativeClip?0:1)):maxClipFrames;
+  if(nativeClip&&totalFrames>chunk)throw new Error('This model needs multiple clips for that length. Try a shorter duration, or install FFmpeg and FFprobe on the helper.');
   for(let remaining=totalFrames;remaining>0;){
     const outputFrames=Math.min(chunk,remaining),skip=segments.length?1:0;
     const request=mode==='frames'?{frames:options.find(n=>n>=outputFrames+skip)}:{requestSeconds:Math.max(1,Math.ceil((outputFrames+skip-1.5)/fps))};

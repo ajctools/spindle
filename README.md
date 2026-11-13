@@ -74,7 +74,7 @@ Open **Workflows → Idea → image → film**. Start with a phrase and the Qwen
 
 Choose a final video length from **1–60 seconds**. Spindle aims for clips of up to five seconds using reported native frame counts or the video API's duration interface, extracts each processed clip's final frame for the next clip, and stitches the saved segments locally. Requests above 30 seconds require acknowledging a prominent long-run/failure warning. Completed segments survive failures and restarts; **Resume film** reuses them. Last-frame chaining can still drift in appearance, motion, or audio at joins.
 
-Image creation needs no extra software. Film processing requires **FFmpeg and FFprobe on the helper computer's PATH**, including an H.264 encoder (`libx264`) and AAC support. Nothing is downloaded automatically. This workflow keeps web search off; reference images used for films and generated outputs are retained locally. End-to-end generation on physical Tiiny hardware remains pending validation.
+Image creation and saving a single Tiiny clip with a 1–5 second target need no extra software. Exact trimming and stitching require **FFmpeg and FFprobe on the helper computer's PATH**, including an H.264 encoder (`libx264`) and AAC support. The workflow keeps web search off and saves reference images and generated outputs locally. End-to-end generation on physical Tiiny hardware remains pending validation.
 
 ## Repair a soundtrack, build a museum
 
