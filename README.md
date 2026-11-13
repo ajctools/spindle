@@ -54,7 +54,7 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 
 | Workspace | What you can do |
 | --- | --- |
-| Chat & vision | Stream replies, see context use and cache hits, ask about images, and attach selected Tiiny Vault excerpts |
+| Chat & vision | Stream replies, see context and cache usage, upload text or images, attach Vault excerpts, and turn long pastes into text files |
 | Images | Generate an image or use a supported reference-image model |
 | Transcribe / Speech / Music | Convert recordings to text, synthesize speech, try reference-voice cloning on compatible models, and generate music |
 | Video | Generate a clip or animate a starting image, with job progress and saved output |
@@ -63,6 +63,8 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 | Meeting Desk | Record or import audio, follow a timestamped transcript, and verify decisions and action items before export |
 | PromptDex & Search Spindle | Prepare reusable prompts, compare two models, and find saved work across the app |
 | Workflows | Make a film, review retakes, repair a soundtrack, build an offline gallery or booklet, or save a sequential recipe |
+| Dashboard | Sort performance tables and see weekly token usage by app and model across the Tiiny |
+| Library & runs | Reopen saved inputs and outputs, download text attachments, and copy prompts and replies |
 | Device | Browse available, downloaded, and loaded models. Manage the connection and view privacy settings |
 
 > [!WARNING]

@@ -37,8 +37,11 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     if(p==='/api/v1/npu/status')return send({devices:[],cpu:{},memory:{}});
     if(p==='/api/v1/models/npu/status')return send({models:loaded.map(id=>({model_id:id,status:'running'}))});
     if(p==='/api/v1/tasks')return send({tasks:[]});
-    if(p==='/api/v1/statistics/week_usage')return send({'2026-11-09':{'test/chat':{total_tokens:5432,request_count:11}}});
-    if(p==='/api/v1/statistics/app_week_usage')return send({'Fixture app':{total_tokens:5432}});
+    if(p==='/api/v1/statistics/week_usage'){
+      const start=new URL(req.url,'http://device').searchParams.get('start_date');
+      return send({[start]:{'test/other':{total_tokens:2},'test/chat':{total_tokens:5430,request_count:11}}});
+    }
+    if(p==='/api/v1/statistics/app_week_usage')return send({'Unknown':{},'Fixture idle':{total_tokens:0},'Fixture app':{total_tokens:5432}});
     if(p==='/kb/sources/files')return send({total:3,items:[
       {source_id:'launch',filename:'Launch notes.txt',finalized:true,entry_ids:['launch-entry']},
       {source_id:'other',filename:'Other notes.txt',finalized:true,entry_ids:['other-entry']},
@@ -135,7 +138,13 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.deepEqual(fullHistory.cloudUsage,fullHistory.lifetimeCloudUsage);
     assert.equal((await (await get('/metrics.json?days=0&scope=all')).json()).records.length,3);
     assert.match(await (await get('/metrics.csv?days=0&scope=all')).text(),/archived-other-device/);
-    assert.equal((await (await get('/api/device-ledger?start=2026-11-09')).json()).totalTokens,5432);
+    const weeks=['2026-11-09','2026-11-02'];
+    const ledgers=await Promise.all(weeks.map(async week=>(await get('/api/device-ledger?start='+week)).json()));
+    assert.deepEqual(ledgers.map(ledger=>ledger.startDate),weeks);
+    const [ledger]=ledgers;
+    assert.equal(ledger.totalTokens,5432);
+    assert.deepEqual(ledger.models.map(row=>row.totalTokens),[5430,2]);
+    assert.deepEqual(ledger.apps.map(row=>row.totalTokens),[5432,0,null]);
     const state=await (await get('/api/state')).json();assert.equal(state.models.length,3);assert.equal(state.models.filter(m=>m.loaded).length,1);assert.ok(!JSON.stringify(state).includes('fixture-key'));
     assert.equal(state.defaultChatModel,'','A store-only Turbo model is ineligible');
     assert.equal(state.models.find(m=>m.id==='test/chat').context,262144);
@@ -354,6 +363,18 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal(resident.status,'completed',resident.error);
     assert.deepEqual(loaded,['test/chat',turbo.id]);
     assert.deepEqual(events.slice(beforeBoth),[['chat','Use an already loaded chat model']]);
+
+    const attachments=[{name:'Pasted text.txt',text:'A private attachment\n'.repeat(220)}];
+    const fileStep={...searchStep,prompt:'',promptMode:'literal',attachments};
+    const fileRun=await finish(await post('/api/run',{steps:[fileStep]}));
+    assert.equal(fileRun.status,'completed',fileRun.error);
+    assert.equal(fileRun.outputs[0].webSearch,undefined);
+    assert.deepEqual(fileRun.steps[0].attachments,attachments);
+    assert.ok(events.at(-1)[1].endsWith(attachments[0].text));
+    const searchedFile=await finish(await post('/api/run',{steps:[{...fileStep,params:{_spindleWebSearch:{enabled:true,provider:'duckduckgo',query:vaultPrompt}}}]}));
+    assert.equal(searchedFile.status,'completed',searchedFile.error);
+    assert.equal(searchedFile.outputs[0].webSearch.query,vaultPrompt);
+    assert.match((await post('/api/run',{steps:[{...fileStep,attachments:[{name:'large.txt',text:'é'.repeat(131073)}]}]})).error,/256 KiB/);
   }finally{
     voiceStart.resolve();voiceOutput.resolve();traceStreamEnd.resolve();
     proc.kill();await new Promise(r=>proc.once('exit',r));await new Promise(r=>device.close(r));

@@ -40,6 +40,8 @@ Search is on by default and the on/off choice is remembered in this browser. The
 
 **Search Spindle** searches the local data loaded in your browser. Search terms stay in that view. **Attach from Vault** sends the selected excerpt to the configured Tiiny along with your next prompt. Spindle keeps the raw excerpt out of the saved request and drops raw runtime fields from that run. The model can still quote the excerpt in its saved answer or reasoning. Use **Send to Tiiny only** to skip web search for a sensitive prompt.
 
+Uploaded text and long-paste attachments are sent to Tiiny as conversation context and saved in local run history. Web search pauses on a turn with text attachments unless you provide a separate query.
+
 Meeting Desk recordings and transcripts, saved review edits, run prompts and replies, and workflow source assets can all contain private data. Live preview sends audio clips to Tiiny. A hotword match prepares an editable query. Submitting that query sends it to DuckDuckGo. Facsimile Book prepares scans in the browser and sends text for requested translation or narration. Its HTML export embeds reviewed scans and text, plus narration when selected. Review the contents of minutes, cut sheets, and booklets before sharing.
 
 **Device → Security & Privacy** offers a session-only, opt-in chat request trace. It records request destinations, transport and response metadata rather than prompts, bodies, keys, or cookie values. The trace export strips Tiiny addresses and internal run IDs. Review exports before sharing.

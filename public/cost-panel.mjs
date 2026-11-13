@@ -1,4 +1,5 @@
 import {cloudRates,cloudEstimate,formatCloudCost,priceDate} from './cloud-cost.mjs';
+import {sortTable,sortableHeader} from './dashboard-table.mjs';
 
 const rates=cloudRates.map(r=>({...r}));
 const number=new Intl.NumberFormat(undefined,{maximumFractionDigits:0});
@@ -29,8 +30,7 @@ export function mountCostPanel(root){
       <p id="cost-no-days" hidden>No completed chat steps match these filters.</p>
       <div class="dash-table-wrap" role="region" aria-label="Estimated cloud costs by day" tabindex="0">
         <table class="dash-table">
-          <thead><tr><th scope="col">Date</th><th scope="col">Input tokens</th><th scope="col">Output tokens</th><th scope="col">Steps included</th>
-            ${rates.map(rate=>`<th scope="col">${rate.model}</th>`).join('')}</tr></thead>
+          <thead><tr>${sortableHeader(['Date','Input tokens','Output tokens','Steps included',...rates.map(rate=>rate.model)])}</tr></thead>
           <tbody id="cost-days"></tbody>
         </table>
       </div>
@@ -56,6 +56,7 @@ export function mountCostPanel(root){
   const tableWrap=daily.querySelector('.dash-table-wrap');
   const noDays=daily.querySelector('#cost-no-days');
   const dayRows=daily.querySelector('#cost-days');
+  const sortDays=sortTable(dayRows,{column:0,direction:-1});
   const inputs=root.querySelectorAll('[data-price]');
 
   function render(){
@@ -91,10 +92,11 @@ export function mountCostPanel(root){
     tableWrap.hidden=dailyCloudUsage.length===0;
     noDays.hidden=dailyCloudUsage.length>0;
     dayRows.innerHTML=dailyCloudUsage.toReversed().map(day=>`<tr>
-      <th scope="row">${dates.format(calendarDate(day.date))}</th>
-      <td>${tokens(day,'inputTokens')}</td><td>${tokens(day,'outputTokens')}</td><td>${day.covered}/${day.completed}</td>
-      ${rates.map(rate=>`<td>${estimate(day,rate).replace('<','&lt;')}</td>`).join('')}
+      <th scope="row" data-sort-value="${Date.parse(day.date)}">${dates.format(calendarDate(day.date))}</th>
+      <td data-sort-value="${day.covered?day.inputTokens:''}">${tokens(day,'inputTokens')}</td><td data-sort-value="${day.covered?day.outputTokens:''}">${tokens(day,'outputTokens')}</td><td data-sort-value="${day.covered}">${day.covered}/${day.completed}</td>
+      ${rates.map(rate=>{const cost=cloudEstimate(day,rate.input,rate.output);return `<td data-sort-value="${cost??''}">${formatCloudCost(cost).replace('<','&lt;')}</td>`;}).join('')}
     </tr>`).join('');
+    sortDays();
   }
 
   inputs.forEach(input=>input.addEventListener('input',()=>{

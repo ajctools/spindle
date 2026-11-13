@@ -50,6 +50,7 @@ const gateway=http.createServer((req,res)=>{
   else if(route==='/api/v1/npu/status')value={devices:[{util_percent:17,mem_used_mb:19000,mem_total_mb:65536}],cpu:{total_percent:22},memory:{usage_percent:30}};
   else if(route==='/api/v1/models/npu/status')value={npu_used:38,npu_available:62,models:[{model_id:'demo/chat',npu_usage:38,status:'running'}]};
   else if(route==='/api/v1/sys/storage')value={total_bytes:1000*1073741824,used_bytes:360*1073741824};
+  else if(route==='/api/v1/sys/ac_power/')value={ac_power:false};
   else if(route==='/api/v1/statistics/week_usage'){value={};for(let day=0;day<7;day++){const date=new Date();date.setDate(date.getDate()-day);value[date.toISOString().slice(0,10)]={'demo/chat':{total_tokens:24000-day*1600,request_count:12}};}}
   else if(route==='/api/v1/statistics/app_week_usage')value={'Demo client':{total_tokens:134400}};
   else{res.writeHead(404);value={error:'Read-only illustration route unavailable.'};}

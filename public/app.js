@@ -2,6 +2,8 @@ import {mountDashboard,stopDashboard,refreshDashboard} from './dashboard.js';
 import {transcriptionFile} from './audio.js';
 import {guides,essentials,workflowTips,workspaceTips,recovery,workflowWarnings,voiceCloneModel,voiceReferenceSample} from './guidance.mjs';
 import {chatDetails,chatMarkdown,chatRunStats} from './chat-ui.mjs';
+import {chatAttachmentText,maxTextBytes,maxTextFiles,pasteThreshold,readTextAttachments,validateTextAttachments} from './chat-attachments.mjs';
+import {downloadArtifact} from './artifact-download.mjs';
 import {meshPreviewHTML,installMeshPreviews} from './mesh-preview.mjs';
 import {startDevicePulse} from './activity.mjs';
 import {createRoughCut} from './rough-cut.mjs';
@@ -43,6 +45,24 @@ async function api(url,body){
 installMeshPreviews();
 startDevicePulse({api,getState:()=>state,navigate:target=>{page=target;show();}});
 function toast(msg){$('#toast').textContent=msg;$('#toast').hidden=false;clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>$('#toast').hidden=true,6000);}
+function copyButton(value,kind){
+  if(typeof value!=='string'||!value.trim())return '';
+  return `<button type="button" class="button quiet copy-button" data-copy-text="${esc(JSON.stringify(value))}" data-copy-kind="${esc(kind)}">Copy ${esc(kind)}</button>`;
+}
+async function copyText(value,kind){
+  if(!value?.trim())return;
+  try{
+    await navigator.clipboard.writeText(value);
+    toast(kind[0].toUpperCase()+kind.slice(1)+' copied.');
+  }catch{
+    const dialog=$('#copy-dialog'),field=$('#copy-content');
+    field.value=value;
+    if(!dialog.open)dialog.showModal();
+    field.focus();
+    field.select();
+  }
+}
+bind('#copy-dialog','close',()=>{$('#copy-content').value='';});
 function fail(e){const tip=recovery(e.message);toast(tip.title);const slot=$('#action-error') || $('#workflow-feedback');if(slot){slot.innerHTML=recoveryHTML(e.message);slot.scrollIntoView({block:'nearest',behavior:'smooth'});}}
 function bind(s,event,fn){const el=$(s);if(el)el.addEventListener(event,fn);}
 function fmtSize(n){return n?(n/1073741824).toFixed(1)+' GiB':'Size not reported';}
@@ -112,7 +132,7 @@ async function openMeetingDesk(result){
     try{
       const {createMeetingDesk}=await import('./meeting-desk.mjs');
       meetingDesk??=createMeetingDesk({
-        api,escape:esc,getRuns:()=>runs,modelOptions,preferred,
+        api,escape:esc,getRuns:()=>runs,modelOptions,preferred,copyButton,
         isLoaded:id=>state?.models.some(model=>model.id===id&&model.loaded),onModelLoaded:()=>refresh(false),
         onQueued:run=>{runs=[run,...runs.filter(item=>item.id!==run.id)];void poll();},
         onRunChanged:poll,
@@ -256,7 +276,7 @@ function securityPage(){
 function fileField(label='Reference image',accept='image/*'){return `<label class="field"><span>${label}</span><input id="input-file" type="file" accept="${accept}"></label>`;}
 function extraFields(){
   if(task==='image')return fileField('Reference image · optional')+'<p class="help">Reference-image support varies by model. Inspect runtime defaults before choosing settings.</p>';
-  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to ${AMPLE_RESPONSE_TOKENS.toLocaleString()} output tokens, capped at half the reported context to leave room for input. With no reported context, Ample requests 32,768. Thinking can share this allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web before each message</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The query below—or your current prompt if left blank—is sent to the selected search provider over HTTPS. Conversation history, images, and your Tiiny key are not sent to it. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to search your current prompt"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. DuckDuckGo may rate-limit requests; a failed search stops the run rather than generating an ungrounded answer.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
+  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to ${AMPLE_RESPONSE_TOKENS.toLocaleString()} output tokens, capped at half the reported context to leave room for input. With no reported context, Ample requests 32,768. Thinking can share this allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web before each message</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The selected provider receives the query below, or your prompt if the query is blank. With text files attached, enter a separate query to use search. Conversation history, attachments, and your Tiiny key stay within your local setup. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to search your current prompt"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. DuckDuckGo may rate-limit requests; a failed search stops the run rather than generating an ungrounded answer.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
   if(task==='asr')return fileField('Recording · WAV, MP3, M4A, WebM, and more','audio/*')+'<p class="help">Converted locally for Tiiny. Use a clear recording under 40 MiB and up to 15 minutes.</p>';
   if(task==='video')return fileField('Starting image · optional')+'<label class="checkline"><input type="checkbox" id="video-preview" checked> Short preview · overrides duration and size on supported models</label>'+'<div class="field-row"><label class="field"><span>Duration · seconds, optional</span><input id="seconds" type="number" min="1" placeholder="Model default"></label><label class="field"><span>Size · optional</span><input id="size" placeholder="Model default"></label></div>';
   if(task==='speech')return `<label class="field"><span>Voice ID · optional, model-specific</span><input id="voice" placeholder="Use the model’s default voice"></label>
@@ -273,6 +293,7 @@ function extraFields(){
 }
 function workbench(){
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
+  let textAttachments=[],readingAttachments=false,pasteCount=0,renderAttachments;
   if(isChat)selectedModel=preferredChatModel();
   else if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=preferred(task);
   const hasVault=isChat&&!state.demo&&vaultAttachment;
@@ -290,9 +311,10 @@ function workbench(){
     </section>`:''}
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
     <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog"><span class="chat-wide-label">Attach from </span>Vault</button>':''}</div>
+    ${isChat?'<input id="chat-text-files" type="file" multiple hidden><ul id="chat-text-attachments" aria-label="Attached text files" hidden></ul><div id="chat-attachment-status" class="sr-only" role="status"></div>':''}
     <div id="model-load-status" class="model-load-status" role="status"><span class="spinner" aria-hidden="true" hidden></span><span></span></div>
     ${hasVault?'<div id="vault-attached" hidden><span></span><button class="button quiet" type="button" aria-label="Remove Vault excerpt">×</button></div>':''}
-    ${!fileOnly?`<label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="${isChat?1:2}" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" required></textarea></label>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
+    ${!fileOnly?`<div class="prompt-row"><label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="${isChat?1:2}" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" ${isChat?'':'required'}></textarea></label><button class="button quiet copy-button" id="copy-draft" type="button" disabled>Copy prompt</button></div>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
     <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit" aria-label="Send to Tiiny only"><span class="chat-wide-label">Send to </span>Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
     ${isChat?'<p id="chat-search-notice" class="chat-search-notice" role="note"></p>':''}
@@ -306,7 +328,65 @@ function workbench(){
   $('#breadcrumb').textContent='Chat & create';
   bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=preferred(task);currentJob=null;workbench();});
   bind('#prompt','input',resizePrompt);
+  bind('#copy-draft','click',()=>copyText($('#prompt').value,'prompt'));
   bind('#attach-image','click',()=>$('#input-file').click());
+  if(isChat){
+    const form=$('#task-form'),prompt=$('#prompt'),picker=$('#chat-text-files');
+    const list=$('#chat-text-attachments'),status=$('#chat-attachment-status');
+    const attachButton=document.createElement('button');
+    attachButton.className='button quiet';
+    attachButton.type='button';
+    attachButton.id='attach-text';
+    attachButton.textContent='＋ Text files';
+    attachButton.title='Attach UTF-8 text files such as TXT, Markdown, CSV, or source code';
+    $('#attach-image').before(attachButton);
+    attachButton.onclick=()=>picker.click();
+    renderAttachments=message=>{
+      list.hidden=!textAttachments.length;
+      list.innerHTML=textAttachments.map((file,i)=>`<li><span>${esc(file.name)}</span><button type="button" class="text-button" data-remove-text="${i}" aria-label="Remove ${esc(file.name)}">×</button></li>`).join('');
+      status.textContent=message;
+      chatOptionsStatus();
+    };
+    list.onclick=e=>{
+      const button=e.target.closest('[data-remove-text]');
+      if(!button)return;
+      const [removed]=textAttachments.splice(Number(button.dataset.removeText),1);
+      renderAttachments(removed.name+' removed.');
+      attachButton.focus();
+    };
+    picker.onchange=async()=>{
+      const files=[...picker.files];
+      picker.value='';
+      if(!files.length||readingAttachments)return;
+      readingAttachments=true;
+      attachButton.disabled=true;
+      try{
+        if(textAttachments.length+files.length>maxTextFiles)throw Error('Attach up to '+maxTextFiles+' text files.');
+        if(files.reduce((sum,file)=>sum+file.size,0)>maxTextBytes)throw Error('Text attachments can total up to 256 KiB.');
+        const added=await readTextAttachments(files);
+        if(!form.isConnected)return;
+        validateTextAttachments([...textAttachments,...added]);
+        textAttachments.push(...added);
+        $('#action-error').textContent='';
+        renderAttachments(added.length===1?added[0].name+' attached.':added.length+' text files attached.');
+      }catch(error){if(form.isConnected)fail(error);}
+      finally{readingAttachments=false;attachButton.disabled=false;}
+    };
+    prompt.onpaste=e=>{
+      const pasted=e.clipboardData?.getData('text/plain') || '';
+      if(pasted.length<=pasteThreshold)return;
+      e.preventDefault();
+      const name=pasteCount?'Pasted text '+(pasteCount+1)+'.txt':'Pasted text.txt';
+      const file={name,text:pasted};
+      try{
+        validateTextAttachments([...textAttachments,file]);
+        textAttachments.push(file);
+        pasteCount++;
+        $('#action-error').textContent='';
+        renderAttachments(name+' attached.');
+      }catch(error){fail(error);}
+    };
+  }
   renderSampleStatus();
   bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chatModel=selectedModel;chat=[];vault?.clear();currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
@@ -316,19 +396,29 @@ function workbench(){
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
     const tiinyOnly=e.submitter?.id==='send-tiiny-only';
     const vaultReference=vault?.reference;
-    const input=form.querySelector('#prompt')?.value || '',messages=task==='chat'?chat.map(({role,content})=>({role,content})):[],switchModels=form.querySelector('#auto-model').checked;
+    const prompt=form.querySelector('#prompt'),input=prompt?.value || '',attachments=[...textAttachments];
+    const messages=isChat?chat.map(({role,content,attachments})=>({role,content:chatAttachmentText(content,attachments)})):[],switchModels=form.querySelector('#auto-model').checked;
     disableSend(form,true);
     try{
+      if(readingAttachments)throw Error('Wait for the text files to finish attaching.');
       const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
+      if(chatStep&&!input.trim()&&!attachments.length)throw Error('Enter a prompt or attach a text file.');
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages,...(attachments.length?{attachments}:{})}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
-      if(s.task==='chat'){chatModel=s.model;chat.push({role:'user',content:input,vaultSource:vaultReference?.name});if(vaultReference&&vault?.reference===vaultReference)vault.clear();$('#prompt').value='';resizePrompt();chatOptionsStatus();}
+      if(chatStep){
+        chatModel=s.model;chat.push({role:'user',content:input,attachments,vaultSource:vaultReference?.name});
+        if(vaultReference&&vault?.reference===vaultReference)vault.clear();
+        if(prompt.value===input)prompt.value='';
+        textAttachments=textAttachments.filter(file=>!attachments.includes(file));
+        renderAttachments('');
+        resizePrompt();
+      }
       if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(j);scrollConversation();poll();
     }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
   });
   bind('#check-model','click',async()=>{try{if(!selectedModel)throw new Error('Choose a downloaded model.');const j=await api('/api/check',{task,model:selectedModel,switchModels:$('#auto-model').checked});currentJob=j.id;toast('A sample check is queued. Its result will be recorded in Device readiness.');poll();}catch(e){fail(e);}});
-  bind('#add-workflow','click',async()=>{try{const s=await getStep(false),needsVoiceReference=s.task==='speech'&&!!s.file;workflow.steps.push({...s,file:undefined,fileFrom:needsVoiceReference||['asr','ocr','mesh'].includes(s.task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast(needsVoiceReference?'Speech step added. Supply its reference recording as the workflow’s starting file.':'Added a '+state.tasks[s.task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
+  bind('#add-workflow','click',async()=>{try{const s=await getStep(false),needsVoiceReference=s.task==='speech'&&!!s.file;workflow.steps.push({...s,file:undefined,fileFrom:needsVoiceReference||['asr','ocr','mesh'].includes(s.task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast(needsVoiceReference?'Speech step added. Supply its reference recording as the workflow’s starting file.':textAttachments.length?'Chat step added. Text attachments are available when you send from Chat.':'Added a '+state.tasks[s.task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
   if(task==='video'){const preview=()=>{for(const id of ['seconds','size']){const e=$('#'+id);if(e)e.disabled=$('#video-preview').checked;}};bind('#video-preview','change',preview);preview();}
   bind('#runtime','click',async()=>{try{const j=await api('/api/runtime?task='+task+'&model='+encodeURIComponent(selectedModel));$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output').innerHTML='<div class="output-meta">RUNTIME DEFAULTS · READ FROM DEVICE</div><pre>'+esc(JSON.stringify(j,null,2))+'</pre>';$('#output-status').textContent='Runtime info';}catch(e){fail(e);}});
   if(currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}
@@ -384,17 +474,20 @@ function thinkingControls(){
 }
 function chatOptionsStatus(){
   const model=state.models.find(m=>m.id===selectedModel),budget=chatOptions.responseLimit==='ample'?ampleResponseTokens(model).toLocaleString():chatOptions.responseLimit==='default'?'runtime default':Number(chatOptions.responseLimit==='custom'?chatOptions.customTokens:chatOptions.responseLimit).toLocaleString();
-  if($('#chat-quick-status'))$('#chat-quick-status').textContent=(chatOptions.search?'Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
+  const attachedText=$('#chat-text-attachments')?.hidden===false;
+  const explicitQuery=!!chatOptions.query.trim();
+  const paused=chatOptions.search&&attachedText&&!explicitQuery;
+  if($('#chat-quick-status'))$('#chat-quick-status').textContent=(paused?'Web search paused':chatOptions.search?'Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
   const searchNotice=$('#chat-search-notice'),deviceNotice=$('#chat-device-notice'),localSend=$('#send-tiiny-only');
   if(!searchNotice)return;
   localSend.hidden=!chatOptions.search;
   const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
   searchNotice.classList.toggle('search-enabled',chatOptions.search);
   searchNotice.hidden=!chatOptions.search;
-  searchNotice.textContent=chatOptions.search?`Send shares ${chatOptions.query.trim()?'your search query':'this prompt'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'';
-  const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
+  searchNotice.textContent=paused?'Search is paused for this message. Enter a separate search query in Chat options to use the web with text attachments.':chatOptions.search?`Send shares ${explicitQuery?'your search query':'this prompt'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'';
+  const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...(attachedText?['the attached text']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
   const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
-  deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search?'Search results go to Tiiny when used. ':''}Runs save locally.`;
+  deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search&&!paused?'Search results go to Tiiny when used. ':''}Runs save locally.`;
 }
 function rememberChatOptions(){if(!saveChatOptions(chatStorage,chatOptions))toast('Browser storage is unavailable. These settings apply until this page closes.');chatOptionsStatus();}
 function bindChatControls(){
@@ -423,9 +516,28 @@ function bindChatControls(){
   bind('#save-search-key','click',async()=>{try{if(!$('#search-key').value.trim())throw new Error('Enter a Brave Search API key first.');const result=await api('/api/search/settings',{key:$('#search-key').value});$('#search-key').value='';keyStatus(result);toast('Search key set for this server session.');}catch(e){fail(e);}});
   bind('#clear-search-key','click',async()=>{try{keyStatus(await api('/api/search/settings',{key:''}));$('#search-key').value='';}catch(e){fail(e);}});
 }
-function resizePrompt(){const prompt=$('#prompt');if(prompt){prompt.style.height=task==='chat'?'0px':'auto';prompt.style.height=Math.min(prompt.scrollHeight,108)+'px';}}
+function resizePrompt(){
+  const prompt=$('#prompt');
+  if(!prompt)return;
+  prompt.style.height=task==='chat'?'0px':'auto';
+  prompt.style.height=Math.min(prompt.scrollHeight,108)+'px';
+  $('#copy-draft').disabled=!prompt.value.trim();
+}
 function scrollConversation(){const el=$('#conversation');if(el)el.scrollTop=el.scrollHeight;}
-function renderChat(){const h=$('#chat-history');if(!h)return;h.innerHTML=task==='chat'?chat.map(m=>`<article class="chat-message ${m.role==='user'?'from-user':'from-assistant'}"><strong>${m.role==='user'?'You':'Spindle'}</strong>${m.vaultSource?'<div class="small muted">Vault · '+esc(m.vaultSource)+'</div>':''}${m.role==='assistant'?chatDetails(m,'thinking'):''}${m.role==='assistant'?chatMarkdown(m.content):'<div class="output-text">'+esc(typeof m.content==='string'?m.content:'[Image message]')+'</div>'}${m.role==='assistant'?chatDetails(m,'sources'):''}</article>`).join(''):'';if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;}
+function textAttachmentDetails(files=[]){
+  return files.map(({name,text})=>`<details class="chat-text-detail"><summary>${esc(name)}</summary><pre><code>${esc(text).replaceAll('\r','&#13;')}</code></pre><button class="button quiet" type="button" data-download-text="${esc(name)}">Download text</button></details>`).join('');
+}
+function renderChat(){
+  const history=$('#chat-history');
+  if(!history)return;
+  history.innerHTML=task==='chat'?chat.map(message=>{
+    const user=message.role==='user';
+    return `<article class="chat-message ${user?'from-user':'from-assistant'}"><strong>${user?'You':'Spindle'}</strong>${message.vaultSource?'<div class="small muted">Vault · '+esc(message.vaultSource)+'</div>':''}
+      ${user?(message.content?'<div class="output-text">'+esc(typeof message.content==='string'?message.content:'[Image message]')+'</div>':'')+textAttachmentDetails(message.attachments):chatDetails(message,'thinking')+chatMarkdown(message.content)+chatDetails(message,'sources')}
+      ${copyButton(message.content,user?'prompt':'reply')}</article>`;
+  }).join(''):'';
+  if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;
+}
 let statsJob=null;
 function renderChatClock(){
   const clock=$('[data-chat-time]');
@@ -496,11 +608,13 @@ function libraryOutput(out){
   return outputHTML(out)+(out.assets||[]).map((a,i)=>`<button type="button" class="button quiet library-delete" data-delete-asset="${esc(a.url)}">Delete ${esc(a.mime.startsWith('image/')?'image':a.mime.startsWith('audio/')?'audio':a.mime.startsWith('video/')?'video':'artifact')}${out.assets.length>1?' '+(i+1):''}</button>`).join('');
 }
 function outputHTML(out,{partial=false}={}) {
-  if(out.authorKind){const label=({plan:'Application design',code:'Complete application source',continue:'Continued native application source',part:'Application source section',audit:'Application code review',repair:'Repaired application source',review:'Visual review'})[out.authorKind] || 'Application author';return '<div class="output-block author-output"><div class="output-meta">TIINY · '+label+'</div><p class="help">'+(out.text?.length || 0).toLocaleString()+' characters returned by the local model. Source is saved with the run.</p><details><summary>Inspect the Tiiny response</summary><pre>'+esc(out.text || out.reasoning || '')+'</pre></details></div>';}
+  if(out.authorKind){const label=({plan:'Application design',code:'Complete application source',continue:'Continued native application source',part:'Application source section',audit:'Application code review',repair:'Repaired application source',review:'Visual review'})[out.authorKind] || 'Application author';return '<div class="output-block author-output"><div class="output-meta">TIINY · '+label+'</div><p class="help">'+(out.text?.length || 0).toLocaleString()+' characters returned by the local model. Source is saved with the run.</p><details><summary>Inspect the Tiiny response</summary><pre>'+esc(out.text || out.reasoning || '')+'</pre>'+copyButton(out.text,'result')+'</details></div>';}
   const structured=structuredOutput(out);
   const museum=out.assets?.find(a=>a.mime==='text/html');
   if(museum)return `<div class="output-block"><div class="output-meta">YOUR OFFLINE MUSEUM</div><p>${esc(out.text)}</p>${out.appAuthor==='tiiny'?'<p class="help">Application code authored by your Tiiny. Data capture, testing and packaging by Spindle.</p>':''}<div class="actions section-gap"><a class="button primary" href="${esc(museum.previewUrl)}" target="_blank" rel="noopener noreferrer">Enter the 3D museum ↗</a><a class="button" href="${esc(museum.url)}" download="tiinyverse-museum.html">Download self-contained HTML</a>${(out.assets || []).filter(a=>a!==museum).map(a=>'<a class="button" href="'+esc(a.url)+'" download>'+esc(a.label || 'Download source')+' ↗</a>').join('')}</div><p class="help">WASD / arrows to walk, drag to look, E to inspect. Includes a readable collection view.</p></div>`;
-  return `<div class="output-block"><div class="output-meta">${esc(state.tasks[out.task]?.label || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'thinking'):''}${structured || (out.text?(out.task==='chat'&&!partial?chatMarkdown(out.text):`<div class="output-text">${esc(out.text)}</div>`):'')}${out.task==='chat'?chatDetails(out,'sources'):''}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(JSON.stringify(out.json,null,2))}</pre></details>`:''}</div>`;
+  const json=structured?JSON.stringify(out.json,null,2):null;
+  const copy=out.assets?.length?'':copyButton(json??out.text,structured?'JSON':out.task==='chat'?'reply':'result');
+  return `<div class="output-block"><div class="output-meta">${esc(state?.tasks[out.task]?.label || out.task || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'thinking'):''}${structured || (out.text?(out.task==='chat'&&!partial?chatMarkdown(out.text):`<div class="output-text">${esc(out.text)}</div>`):'')}${out.task==='chat'?chatDetails(out,'sources'):''}${copy}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(json)}</pre></details>`:''}</div>`;
 }
 let handled=new Set();
 function renderCurrent(j){
@@ -615,10 +729,21 @@ function renderRuns(){
   const sorted=runs.filter(run=>!librarySelection||run.id===librarySelection).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
   sorted.forEach((j,index)=>{
     let card=target.querySelector(`[data-run-id="${j.id}"]`);
-    const sig=JSON.stringify([j.outputs,j.finalOutput,j.error,j.restoreError,j.persistenceError]);
+    const sig=JSON.stringify([j.input,j.steps,j.outputs,j.finalOutput,j.error,j.restoreError,j.persistenceError]);
     if(!card){card=document.createElement('article');card.className='panel run-card';card.dataset.runId=j.id;}
     if(runSignatures.get(j.id)!==sig||!card.children.length){
-      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${j.finalOutput?libraryOutput(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${j.outputs.map(libraryOutput).join('')}</details>`:j.outputs.map(libraryOutput).join('')}${j.error?recoveryHTML(j.error):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary><pre>${esc(JSON.stringify({input:j.input,steps:j.steps},null,2))}</pre></details></div>`;
+      const [step]=j.steps;
+      const single=j.steps.length===1;
+      const fromInput=step?.prompt==='{{input}}'&&step.promptMode!=='literal';
+      const template=step?.promptMode!=='literal'&&/\{\{(?:input|previous\.text)\}\}/.test(step?.prompt || '');
+      const prompt=single?copyButton(fromInput?j.input:step.prompt,template&&!fromInput?'prompt template':'prompt'):'';
+      const recipeCopies=[
+        fromInput&&single?'':copyButton(j.input,'starting text'),
+        ...(single?[]:j.steps.map((step,i)=>copyButton(step.prompt,'step '+(i+1)+' prompt'))),
+      ].join('');
+      const recipeSteps=j.steps.map(({attachments,...step})=>attachments?.length?{...step,attachments:attachments.map(file=>file.name)}:step);
+      const inputAttachments=textAttachmentDetails(single?step.attachments:undefined);
+      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${prompt}${inputAttachments}${j.finalOutput?libraryOutput(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${j.outputs.map(libraryOutput).join('')}</details>`:j.outputs.map(libraryOutput).join('')}${j.error?recoveryHTML(j.error):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary>${recipeCopies?'<div class="actions">'+recipeCopies+'</div>':''}<pre>${esc(JSON.stringify({input:j.input,steps:recipeSteps},null,2))}</pre></details></div>`;
       runSignatures.set(j.id,sig);
     }
     card.querySelector('.run-actions').innerHTML=`<span class="pill ${j.status==='completed'?'live':''}">${esc(j.status==='running'?j.phase || j.status:j.status)}${j.progress!=null?' · '+j.progress+'%':''}</span>${['queued','running'].includes(j.status)?'<button class="button danger cancel-run">Stop run</button>':''}${j.status==='completed'&&j.outputs.some(o=>o.task==='image'&&o.assets?.some(a=>a.mime.startsWith('image/')))?'<button class="button use-image">Edit / animate image →</button>':''}${j.roughCut?.segments?'<button class="button review-cut">Review rough cut →</button>':''}${j.film&&['failed','cancelled','interrupted'].includes(j.status)?'<button class="button resume-film">Resume film →</button>':''}`;
@@ -785,6 +910,13 @@ function openGuide(tabName){
   dialog.scrollTop=0;
 }
 document.addEventListener('click',async e=>{
+  const attachment=e.target.closest('[data-download-text]');
+  if(attachment){
+    downloadArtifact(attachment.dataset.downloadText,attachment.closest('details').querySelector('code').textContent);
+    return;
+  }
+  const copy=e.target.closest('[data-copy-text]');
+  if(copy){await copyText(JSON.parse(copy.dataset.copyText),copy.dataset.copyKind);return;}
   if(e.target.closest('[data-open-prompt-dex]')){void openPromptDex();return;}
   const del=e.target.closest('[data-delete-asset]');
   if(del){if(!confirm('Move this output to Spindle’s local trash? The rest of the run stays in the library.'))return;del.disabled=true;try{await api('/api/library/delete',{url:del.dataset.deleteAsset});runsTag='';await poll();toast('Item moved to local trash.');}catch(err){fail(err);del.disabled=false;}return;}

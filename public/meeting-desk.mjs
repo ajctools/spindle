@@ -24,7 +24,7 @@ export function meetingQuery(text,matches){
   return matches.join(' ');
 }
 
-export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred,isLoaded,onModelLoaded,onQueued,onRunChanged}){
+export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred,isLoaded,onModelLoaded,onQueued,onRunChanged,copyButton=()=>''}){
   let root=null,recorder=null,source=null,timer=null,starting=false,busy=false,recording=null;
   let title='',model='',terms='research',selected='',revision='',status='',providerBusy=false,visible=false;
   let previewEnabled=false,preview=null,previewPending=false,loadingModel=false,requestingSummary=false;
@@ -173,6 +173,7 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
     const phase=run?.status==='running'?(run.phase||'Transcribing'):run?.status;
     el('#meeting-run-status').textContent=run?[phase,total?`${done} of ${total} audio sections processed`:null,run.error,run.restoreError].filter(Boolean).join(' · '):'';
     const lines=meetingLines(run);
+    el('#meeting-transcript-actions').innerHTML=copyButton(lines.map(line=>line.text).join('\n'),'transcript');
     el('#meeting-transcript').innerHTML=lines.length?lines.map((line,index)=>`<article data-transcript-line="${index}"><button class="text-button" type="button" data-meeting-seek="${line.at}">${line.approximate?'Around ':''}${clock(line.at)}</button>${line.speaker?' <strong>'+esc(line.speaker)+'</strong>':''}<p>${esc(line.text)}</p></article>`).join(''):
       `<p class="help">${!run?'Choose a recording, then transcribe it to start the timeline.':done?'Tiiny returned no transcript text.':phase==='queued'||run.status==='running'?'Transcript text appears here as each audio section finishes.':'No transcript text was saved for this run.'}</p>`;
     renderMatches(run,lines);
@@ -186,7 +187,7 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
     stopSummary.dataset.run=summaryActive?latest.id:'';
     const output=summary?.outputs.at(-1);
     el('#meeting-summary-status').textContent=summaryErrors.get(selected)||(latest?[latest.status==='running'?latest.phase||'Drafting':latest.status,latest.error,latest.restoreError,latest.outputs.at(-1)?.finishReason==='length'?'The response reached the model’s allowance and may be incomplete.':null].filter(Boolean).join(' · '):'');
-    el('#meeting-summary-output').innerHTML=output?.text?chatMarkdown(output.text):'';
+    el('#meeting-summary-output').innerHTML=output?.text?chatMarkdown(output.text)+copyButton(output.text,'summary'):'';
     renderPacket(run,packet,lines);
   }
   function renderPacket(run,packet,lines){
@@ -281,7 +282,7 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
           <button id="meeting-summary-stop" class="button quiet" type="button" hidden>Stop summary</button></div></form>
           <p id="meeting-summary-status" role="status" class="help"></p><div id="meeting-summary-output"></div><div id="meeting-packet"></div>
         </details>
-        <div id="meeting-transcript"></div>
+        <div id="meeting-transcript-actions"></div><div id="meeting-transcript"></div>
         <p class="help">Voice labels appear only if Tiiny returns speaker segments. Labels are anonymous and can reset between sections.</p>
         </section>
         <aside class="panel panel-body"><h2>Research</h2>

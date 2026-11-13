@@ -178,3 +178,21 @@
   .creating main:has(.chat-workspace) .device-pulse{display:none}
   .chat-workspace .chat-run-stats progress,.chat-workspace [data-chat-percent]{display:none}
 }
+
+.prompt-row{display:flex;align-items:flex-start;gap:8px}
+.prompt-row .prompt-field{flex:1;min-width:0}
+.copy-button{flex:none;padding:4px 8px;min-height:28px}
+.chat-message>.copy-button,.output-block>.copy-button{margin-top:6px}
+.run-card .output-area>.copy-button{margin-bottom:10px}
+#copy-dialog form{margin-top:8px}
+
+.chat-workspace .composer-top:has(#attach-text){flex-wrap:wrap}
+.composer-top #attach-text{flex-shrink:0;min-height:30px;padding:4px 8px}
+#chat-text-attachments{display:flex;flex-wrap:wrap;gap:6px;list-style:none;padding:0;margin:6px 0}
+#chat-text-attachments[hidden]{display:none}
+#chat-text-attachments li{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:12px}
+#chat-text-attachments li span{overflow-wrap:anywhere}
+#chat-text-attachments button{flex:none;padding:2px 4px}
+.chat-text-detail{margin:6px 0;overflow-wrap:anywhere}
+.chat-text-detail pre{max-height:240px;overflow:auto;white-space:pre-wrap}
+@media(max-width:700px){.composer-top #attach-text{min-height:40px;padding-inline:6px;font-size:12px}}
