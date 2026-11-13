@@ -21,16 +21,19 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
   const testDir=await fs.mkdtemp(path.join(root,'test','.runtime-'));
   const port=18437,events=[],vaultChat=[],speechRequests=[];let loaded=['test/chat'],showDeviceWebPage=false;
   const voiceStart=Promise.withResolvers(),voiceOutput=Promise.withResolvers(),traceStreamEnd=Promise.withResolvers();
+  const turbo={id:'fixture/turbo',name:'Qwen3.6-27B-Turbo',type:'Text Generation',input:'Text',output:'Text',npu_usage:70};
   const models=[{id:'test/chat',model_id:'test/chat',name:'Chat',type:'Text Generation',input:'Text',output:'Text',npu_usage:70},{id:'test/voice',model_id:'test/voice',name:'Voice',type:'Text-to-Speech',input:'Text',output:'Audio',npu_usage:50,supported:['Voice Cloning']}];
+  let turboDownloaded=false;
   const device=http.createServer(async(req,res)=>{
     let raw='';for await(const b of req)raw+=b;
     const p=new URL(req.url,'http://device').pathname;
     const send=j=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(j));};
     assert.equal(req.headers.authorization,'Bearer fixture-key');
     if(showDeviceWebPage){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end('<!doctype html><title>Private device web page fixture</title>');return;}
-    if(p==='/api/v1/models/online_models')return send(models);
-    if(p==='/api/v1/models/')return send({data:models});
-    if(p==='/v1/models')return send({data:models.filter(m=>loaded.includes(m.id)).map(m=>m.id==='test/chat'?{...m,context_window:262144}:m)});
+    if(p==='/api/v1/models/online_models')return send([...models,turbo]);
+    const downloaded=turboDownloaded?[...models,turbo]:models;
+    if(p==='/api/v1/models/')return send({data:downloaded});
+    if(p==='/v1/models')return send({data:downloaded.filter(m=>loaded.includes(m.id)).map(m=>m.id==='test/chat'?{...m,context_window:262144}:m)});
     if(p==='/api/v1/npu/status')return send({devices:[],cpu:{},memory:{}});
     if(p==='/api/v1/models/npu/status')return send({models:loaded.map(id=>({model_id:id,status:'running'}))});
     if(p==='/api/v1/tasks')return send({tasks:[]});
@@ -133,7 +136,8 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal((await (await get('/metrics.json?days=0&scope=all')).json()).records.length,3);
     assert.match(await (await get('/metrics.csv?days=0&scope=all')).text(),/archived-other-device/);
     assert.equal((await (await get('/api/device-ledger?start=2026-11-09')).json()).totalTokens,5432);
-    const state=await (await get('/api/state')).json();assert.equal(state.models.length,2);assert.equal(state.models.filter(m=>m.loaded).length,1);assert.ok(!JSON.stringify(state).includes('fixture-key'));
+    const state=await (await get('/api/state')).json();assert.equal(state.models.length,3);assert.equal(state.models.filter(m=>m.loaded).length,1);assert.ok(!JSON.stringify(state).includes('fixture-key'));
+    assert.equal(state.defaultChatModel,'','A store-only Turbo model is ineligible');
     assert.equal(state.models.find(m=>m.id==='test/chat').context,262144);
     assert.equal((await fetch(base+'/api/run',{method:'POST',body:'{}'})).status,403);
     assert.equal((await fetch(base+'/api/run',{method:'POST',headers:{cookie,origin:'https://example.com'},body:'{}'})).status,403);
@@ -256,6 +260,12 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal(filteredExport.records.length,0);
     assert.equal(Object.hasOwn(filteredExport,'lifetimeCloudUsage'),false);
 
+    turboDownloaded=true;
+    assert.equal((await(await get('/api/state')).json()).defaultChatModel,turbo.id);
+    assert.deepEqual(await post('/api/chat/default/load',{}),{status:'occupied'});
+    loaded=[];
+    assert.deepEqual(await post('/api/chat/default/load',{}),{status:'ready'});
+    assert.deepEqual(loaded,[turbo.id]);
     const configured=await post('/api/chat/default',{model:'test/chat'});
     assert.deepEqual(configured,{model:'test/chat'});
     assert.equal((await(await get('/api/state')).json()).defaultChatModel,'test/chat');
@@ -272,6 +282,9 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal(local.outputs[0].webSearch,undefined);
     assert.deepEqual(local.steps[0].params._spindleWebSearch,{enabled:false});
     assert.doesNotMatch(JSON.stringify(local),/unused private search query/);
+    await post('/api/chat/default',{model:''});
+    assert.equal((await(await get('/api/state')).json()).defaultChatModel,'');
+    assert.deepEqual(await post('/api/chat/default/load',{}),{status:'unavailable'});
 
     assert.equal((await fetch(base+'/api/vault/documents')).status,403);
     const sources=await (await get('/api/vault/documents')).json();
@@ -319,6 +332,28 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       ref_text:voiceReferenceSample.refText,ref_audio:referenceAudio,
     });
     assert.equal(clone.steps[0].file,undefined);
+
+    const chatTurn=prompt=>post('/api/run',{switchModels:true,keepChatModel:true,steps:[{task:'chat',model:'test/chat',prompt,promptMode:'literal'}]}).then(finish);
+    loaded=[turbo.id];
+    const failedSwitch=await chatTurn('Test a stream failure');
+    assert.equal(failedSwitch.status,'failed');
+    assert.equal(failedSwitch.restoredModels,true);
+    assert.deepEqual(loaded,[turbo.id]);
+
+    const beforeChat=events.length;
+    const first=await chatTurn('Switch to another chat model');
+    assert.equal(first.status,'completed',first.error);
+    assert.deepEqual(loaded,['test/chat']);
+    const second=await chatTurn('Reuse the loaded model');
+    assert.equal(second.status,'completed',second.error);
+    assert.deepEqual(events.slice(beforeChat).filter(([action])=>action!=='chat'),[['stop',turbo.id],['start','test/chat']]);
+
+    loaded=['test/chat',turbo.id];
+    const beforeBoth=events.length;
+    const resident=await chatTurn('Use an already loaded chat model');
+    assert.equal(resident.status,'completed',resident.error);
+    assert.deepEqual(loaded,['test/chat',turbo.id]);
+    assert.deepEqual(events.slice(beforeBoth),[['chat','Use an already loaded chat model']]);
   }finally{
     voiceStart.resolve();voiceOutput.resolve();traceStreamEnd.resolve();
     proc.kill();await new Promise(r=>proc.once('exit',r));await new Promise(r=>device.close(r));

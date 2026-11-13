@@ -79,7 +79,6 @@
 .trace-hop-time{text-align:right}
 .trace-coverage{margin:0}
 .trace-coverage p{margin-top:8px;max-width:90ch}
-.creation-composer .chat-send-privacy .chat-search-notice + .chat-search-notice{margin-top:2px}
 .creation-composer #send-tiiny-only{flex-shrink:0}
 @media(max-width:520px){.creation-composer .chat-send-row:has(#send-tiiny-only){flex-wrap:wrap;gap:6px 8px}}
 @media(max-width:1050px){.trace-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}

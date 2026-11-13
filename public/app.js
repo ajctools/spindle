@@ -18,6 +18,7 @@ const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>(
 const {createWorkshops}=await import('./workshops.mjs').catch(()=>({createWorkshops:()=>({mount(element){element.innerHTML='<p class="help">Restart the helper to load the soundtrack and museum workflows.</p>';},update(){},adoptVideo(){}})}));
 const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=null,page='workbench',task='chat',selectedModel='',currentJob=null,chat=[],runs=[],saved=[],workflow={name:'Untitled workflow',steps:[]};
+let chatModel='';
 let filters={q:'',type:'all',status:'all'},connectionInfo=null,sampleInput=null,exampleUndo=null;
 let chatStorage;try{chatStorage=window.localStorage;}catch{}
 let chatOptions=loadChatOptions(chatStorage);
@@ -49,7 +50,10 @@ function compatible(t,installed=false){return (state?.models || []).filter(m=>m.
 function modelLabel(model,status=model.loaded?'loaded':model.installed?'downloaded':'download needed'){return model.name+' · '+status;}
 function modelOptions(t,id,all=false){const ms=compatible(t,!all);return '<option value="">Choose a model…</option>'+ms.map(m=>`<option value="${esc(m.id)}" ${id===m.id?'selected':''}>${esc(modelLabel(m))}</option>`).join('');}
 function preferred(t){return compatible(t,true).find(m=>m.loaded)?.id || compatible(t,true)[0]?.id || '';}
-function preferredChatModel(){return compatible('chat',true).find(m=>m.id===state.defaultChatModel)?.id || preferred('chat');}
+function preferredChatModel(){
+  const models=compatible('chat',true);
+  return models.find(m=>m.id===chatModel)?.id || models.find(m=>m.loaded)?.id || models.find(m=>m.id===state.defaultChatModel)?.id || models[0]?.id || '';
+}
 function taskOptions(id){return Object.entries(state.tasks).map(([k,t])=>`<option value="${k}" ${id===k?'selected':''}>${esc(t.label)}</option>`).join('');}
 const studio=createStudio({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
 const roughCut=createRoughCut({api,escape:esc,modelOptions,preferred,readFile,poll,toast});
@@ -268,12 +272,13 @@ function extraFields(){
   return '';
 }
 function workbench(){
-  if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=task==='chat'?preferredChatModel():preferred(task);
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
+  if(isChat)selectedModel=preferredChatModel();
+  else if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=preferred(task);
   const hasVault=isChat&&!state.demo&&vaultAttachment;
   const titles={chat:'What’s on your mind?',image:'Picture something new.',asr:'Make every word useful.',speech:'Give your words a voice.',music:'Find your next sound.',video:'Set your ideas in motion.',ocr:'A clearer view of your documents.',mesh:'Give an image a new dimension.',decision:'Find the right direction.',embed:'Find meaning in your text.',rerank:'Bring the best match forward.'};
   const action=isChat?'Send':({image:'Create image',asr:'Transcribe',speech:'Create speech',music:'Create music',video:'Create video',ocr:'Read document',mesh:'Create 3D object',decision:'Evaluate',embed:'Create embeddings',rerank:'Rank documents'})[task];
-  $('#view').innerHTML=`<section class="creation-workspace" aria-label="${esc(label)} workspace">
+  $('#view').innerHTML=`<section class="creation-workspace${isChat?' chat-workspace':''}" aria-label="${esc(label)} workspace">
     <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
     <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,4).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
     <div id="chat-history" class="chat-history" role="log" aria-label="Conversation"></div>
@@ -284,29 +289,29 @@ function workbench(){
       <span data-chat-rate></span><span data-chat-cache></span>
     </section>`:''}
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
-    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog">Attach from Vault</button>':''}</div>
+    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog"><span class="chat-wide-label">Attach from </span>Vault</button>':''}</div>
     <div id="model-load-status" class="model-load-status" role="status"><span class="spinner" aria-hidden="true" hidden></span><span></span></div>
     ${hasVault?'<div id="vault-attached" hidden><span></span><button class="button quiet" type="button" aria-label="Remove Vault excerpt">×</button></div>':''}
-    ${!fileOnly?`<label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="2" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" required></textarea></label>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
+    ${!fileOnly?`<label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="${isChat?1:2}" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" required></textarea></label>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
-    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit">Send to Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
-    ${isChat?'<div class="chat-send-privacy"><p id="chat-search-notice" class="chat-search-notice" role="note"></p><p id="chat-device-notice" class="chat-search-notice"></p></div>':''}
+    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit" aria-label="Send to Tiiny only"><span class="chat-wide-label">Send to </span>Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
+    ${isChat?'<p id="chat-search-notice" class="chat-search-notice" role="note"></p>':''}
     <details id="${isChat?'chat':'creation'}-options" class="chat-options"><summary><span>${isChat?'Chat':esc(label)} options</span><span class="small muted">${isChat?'Search, thinking & more':'Fine-tune your result'}</span></summary><div class="chat-options-body"><div class="model-note" id="model-note"></div><button class="text-button model-help" type="button" data-guide="essentials">About this model →</button>
     ${isChat?`<label class="field"><span>Default chat model</span><select id="default-chat-model"><option value="">No default</option>${compatible('chat',true).map(m=>`<option value="${esc(m.id)}" ${m.id===state.defaultChatModel?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label><p class="help" id="default-chat-status" role="status">Loads when Chat opens on an idle, empty device.</p>`:''}
     ${isChat||!fileOnly&&task!=='rerank'?extraFields():''}
     <details><summary>Advanced settings</summary><p class="help">Optional. Leave {} for model defaults. Add settings only when the selected model supports them.</p><textarea id="params" aria-label="Advanced JSON parameters">${task==='decision'?JSON.stringify({questions:{route:{type:'choice',instructions:'Which team should handle this?',criteria:{general:null,technical:null,billing:null}}}},null,2):'{}'}</textarea></details>
-    <p class="help privacy-inline">Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.</p><label class="checkline"><input id="auto-model" type="checkbox" checked> Switch models if needed, then restore my loaded models.</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
+    ${isChat?'<p id="chat-device-notice" class="help privacy-inline"></p>':''}<p class="help privacy-inline">${isChat?'Model switching can affect other clients.':'Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.'}</p><label class="checkline"><input id="auto-model" type="checkbox" checked> ${isChat?'Switch models if needed and keep the chat model loaded.':'Switch models if needed, then restore my loaded models.'}</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
     </div></details></form>${hasVault?vaultAttachment.vaultDialogHTML:''}</section>`;
   const vault=hasVault?vaultAttachment.bindVaultAttachment({api,dialog:$('#vault-dialog'),open:$('#attach-vault'),attached:$('#vault-attached'),onChange:chatOptionsStatus}):null;
   $('#breadcrumb').textContent='Chat & create';
-  bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=task==='chat'?preferredChatModel():preferred(task);currentJob=null;workbench();});
+  bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=preferred(task);currentJob=null;workbench();});
   bind('#prompt','input',resizePrompt);
   bind('#attach-image','click',()=>$('#input-file').click());
   renderSampleStatus();
-  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chat=[];vault?.clear();currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
+  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chatModel=selectedModel;chat=[];vault?.clear();currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
   if(task==='chat')bindChatControls();
-  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;selectedModel=preferredChatModel();workbench();});
+  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;workbench();});
   bind('#task-form','submit',async e=>{
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
     const tiinyOnly=e.submitter?.id==='send-tiiny-only';
@@ -315,10 +320,10 @@ function workbench(){
     disableSend(form,true);
     try{
       const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
-      if(s.task==='chat'){chat.push({role:'user',content:input,vaultSource:vaultReference?.name});if(vaultReference&&vault?.reference===vaultReference)vault.clear();$('#prompt').value='';resizePrompt();chatOptionsStatus();}
+      if(s.task==='chat'){chatModel=s.model;chat.push({role:'user',content:input,vaultSource:vaultReference?.name});if(vaultReference&&vault?.reference===vaultReference)vault.clear();$('#prompt').value='';resizePrompt();chatOptionsStatus();}
       if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(j);scrollConversation();poll();
     }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
   });
@@ -332,7 +337,7 @@ function workbench(){
 function disableSend(form,disabled){form?.querySelectorAll('button[type="submit"]').forEach(button=>{button.disabled=disabled;});}
 async function warmDefaultChat(){
   const id=state.defaultChatModel;
-  if(!id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
+  if(!id||selectedModel!==id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
   warmingChatModel=id;
   warmChatError=null;
   renderModelLoad();
@@ -379,13 +384,14 @@ function thinkingControls(){
 }
 function chatOptionsStatus(){
   const model=state.models.find(m=>m.id===selectedModel),budget=chatOptions.responseLimit==='ample'?ampleResponseTokens(model).toLocaleString():chatOptions.responseLimit==='default'?'runtime default':Number(chatOptions.responseLimit==='custom'?chatOptions.customTokens:chatOptions.responseLimit).toLocaleString();
-  if($('#chat-quick-status'))$('#chat-quick-status').textContent=(chatOptions.search?'◎ Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
+  if($('#chat-quick-status'))$('#chat-quick-status').textContent=(chatOptions.search?'Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
   const searchNotice=$('#chat-search-notice'),deviceNotice=$('#chat-device-notice'),localSend=$('#send-tiiny-only');
   if(!searchNotice)return;
   localSend.hidden=!chatOptions.search;
   const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
   searchNotice.classList.toggle('search-enabled',chatOptions.search);
-  searchNotice.textContent=chatOptions.search?`With Send, ${provider} gets ${chatOptions.query.trim()?'your separate search query':'this prompt as a search query'} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'Web search is off for this send.';
+  searchNotice.hidden=!chatOptions.search;
+  searchNotice.textContent=chatOptions.search?`Send shares ${chatOptions.query.trim()?'your search query':'this prompt'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'';
   const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
   const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
   deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search?'Search results go to Tiiny when used. ':''}Runs save locally.`;
@@ -397,8 +403,8 @@ function bindChatControls(){
     select.disabled=true;
     try{
       await api('/api/chat/default',{model});state.defaultChatModel=model;
-      if(page==='workbench'&&task==='chat'&&select===$('#default-chat-model')&&model&&!chat.length&&!currentJob){
-        selectedModel=model;$('#model').value=model;modelNote();renderModelLoad();
+      if(page==='workbench'&&task==='chat'&&select===$('#default-chat-model')&&!chat.length&&!currentJob){
+        selectedModel=preferredChatModel();$('#model').value=selectedModel;modelNote();renderModelLoad();
       }
       status.textContent=model?'Default model saved.':'Default model cleared.';
       if(model&&page==='workbench'&&task==='chat')void warmDefaultChat();
@@ -417,7 +423,7 @@ function bindChatControls(){
   bind('#save-search-key','click',async()=>{try{if(!$('#search-key').value.trim())throw new Error('Enter a Brave Search API key first.');const result=await api('/api/search/settings',{key:$('#search-key').value});$('#search-key').value='';keyStatus(result);toast('Search key set for this server session.');}catch(e){fail(e);}});
   bind('#clear-search-key','click',async()=>{try{keyStatus(await api('/api/search/settings',{key:''}));$('#search-key').value='';}catch(e){fail(e);}});
 }
-function resizePrompt(){const prompt=$('#prompt');if(prompt){prompt.style.height='auto';prompt.style.height=Math.min(prompt.scrollHeight,108)+'px';}}
+function resizePrompt(){const prompt=$('#prompt');if(prompt){prompt.style.height=task==='chat'?'0px':'auto';prompt.style.height=Math.min(prompt.scrollHeight,108)+'px';}}
 function scrollConversation(){const el=$('#conversation');if(el)el.scrollTop=el.scrollHeight;}
 function renderChat(){const h=$('#chat-history');if(!h)return;h.innerHTML=task==='chat'?chat.map(m=>`<article class="chat-message ${m.role==='user'?'from-user':'from-assistant'}"><strong>${m.role==='user'?'You':'Spindle'}</strong>${m.vaultSource?'<div class="small muted">Vault · '+esc(m.vaultSource)+'</div>':''}${m.role==='assistant'?chatDetails(m,'thinking'):''}${m.role==='assistant'?chatMarkdown(m.content):'<div class="output-text">'+esc(typeof m.content==='string'?m.content:'[Image message]')+'</div>'}${m.role==='assistant'?chatDetails(m,'sources'):''}</article>`).join(''):'';if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;}
 let statsJob=null;
@@ -545,7 +551,18 @@ function renderModels(){
   document.querySelectorAll('.model-action').forEach(b=>b.onclick=()=>modelAction(b));document.querySelectorAll('.detail').forEach(b=>b.onclick=()=>modelDetails(b.dataset.id));
 }
 async function modelAction(b){
-  b.disabled=true;const label=b.textContent;b.textContent=({start:'Loading…',stop:'Unloading…',download:'Requesting…'})[b.dataset.action];try{await api('/api/model',{id:b.dataset.id,action:b.dataset.action});toast(b.dataset.action==='download'?'Download requested. Refresh to check its status.':'Model action completed.');await refresh();}catch(e){fail(e);}finally{b.disabled=false;b.textContent=label;}
+  const {id,action}=b.dataset,label=b.textContent;
+  b.disabled=true;b.textContent=({start:'Loading…',stop:'Unloading…',download:'Requesting…'})[action];
+  try{
+    await api('/api/model',{id,action});
+    if(action==='start'&&compatible('chat',true).some(model=>model.id===id)){
+      if(id!==chatModel){chat=[];if(task==='chat')currentJob=null;}
+      chatModel=id;
+    }
+    if(action==='stop'&&id===chatModel)chatModel='';
+    toast(action==='download'?'Download requested. Refresh to check its status.':'Model action completed.');
+    await refresh();
+  }catch(e){fail(e);}finally{b.disabled=false;b.textContent=label;}
 }
 function modelDetails(id){const m=state.models.find(m=>m.id===id);$('#model-detail').innerHTML=`<div class="eyebrow">${esc(m.type)}</div><h2>${esc(m.name)}</h2><p class="small muted">${esc(m.id)}</p><div class="section-gap">${[['Inputs',m.input],['Outputs',m.output],['NPU reservation',m.npu+'%'],['Store NPU estimate',m.storeNpu==null?'Not reported':m.storeNpu+'%'],['Disk size',fmtSize(m.size)],['Context window',m.context || 'Not reported'],['Capabilities',[...m.capabilities,...m.supported].join(', ') || 'Not reported'],['Reasoning levels',m.reasoningLevels.join(', ') || 'Not reported'],['Version',m.version || 'Not reported'],['Availability',m.loaded?'Loaded':m.installed?'Downloaded':m.available?'Store':'Custom']].map(([k,v])=>`<div class="metric-row"><span class="muted">${k}</span><span>${esc(v)}</span></div>`).join('')}</div><div class="model-description">${esc(m.description)}</div><p class="help section-gap">Reported by your device. A listed model or capability does not establish that every API option has been tested.</p>`;$('#model-dialog').showModal();}
 const recipes=[
@@ -700,7 +717,7 @@ async function insertDexPrompt(text,sampleName){
   const sample=sampleName?await loadSampleFile(sampleName):null;
   if(page!=='workbench'||task!=='chat'){
     if(task!=='chat'){
-      task='chat';selectedModel=preferredChatModel();sampleInput=null;exampleUndo=null;currentJob=null;
+      task='chat';sampleInput=null;exampleUndo=null;currentJob=null;
     }
     page='workbench';show();
   }

@@ -121,11 +121,17 @@ async function readInventory(){
   await writeJSON('catalog.json',publicState());await fs.writeFile(path.join(DATA,'catalog.csv'),csv(models),{mode:0o600});
   return publicState();
 }
-function publicState(){if(!cached)return null;return {...(process.env.SPINDLE_DEMO==='1'?{demo:true}:{}),models:cached.models,defaultChatModel:chatDefaults[cached.connectionId]||'',syncedAt:cached.syncedAt,storeSyncedAt:cached.storeSyncedAt,storeError:cached.storeError,changes:cached.changes,npu:cached.npu,npuError:cached.npuError,tasks};}
+function defaultChatModel(connectionId){
+  if(cached?.connectionId!==connectionId)return '';
+  if(Object.hasOwn(chatDefaults,connectionId))return chatDefaults[connectionId];
+  return cached.models.find(model=>model.installed&&model.tasks.includes('chat')&&[model.name,model.id].some(label=>
+    /(?:^|[^a-z0-9])qwen[\s._-]*3[._-]6(?![a-z0-9])/i.test(label)&&/(?:^|[^a-z0-9])turbo(?![a-z0-9])/i.test(label)))?.id || '';
+}
+function publicState(){if(!cached)return null;return {...(process.env.SPINDLE_DEMO==='1'?{demo:true}:{}),models:cached.models,defaultChatModel:defaultChatModel(cached.connectionId),syncedAt:cached.syncedAt,storeSyncedAt:cached.storeSyncedAt,storeError:cached.storeError,changes:cached.changes,npu:cached.npu,npuError:cached.npuError,tasks};}
 const chatDefaultBusy=()=>active||deviceControl||cueRequests>0||jobs.some(j=>j.status==='queued');
 async function warmChatDefault(){
   if(chatDefaultBusy())return {status:'busy'};
-  const connection=await config(),connectionId=connectionHash(connection),id=chatDefaults[connectionId];
+  const connection=await config(),connectionId=connectionHash(connection),id=defaultChatModel(connectionId);
   if(!id||cached?.connectionId!==connectionId||!cached.models.some(m=>m.id===id&&m.installed&&m.tasks.includes('chat')))return {status:'unavailable'};
   const options={connection,timeout:5000};
   const response=await remoteJSON('/v1/models',{...options,transport:'openai'});
@@ -142,7 +148,7 @@ async function warmChatDefault(){
     const hardware=await remoteJSON('/api/v1/npu/status',options);
     if(!emptyReadyDevice(hardware,residency,live))return {status:'busy'};
   }
-  if(chatDefaultBusy()||chatDefaults[connectionId]!==id)return {status:'busy'};
+  if(chatDefaultBusy()||defaultChatModel(connectionId)!==id)return {status:'busy'};
   await startModel(id,connection);
   await waitModel(id,true,connection);
   return {status:'ready'};
@@ -205,7 +211,7 @@ async function switchTo(id,job){
   if(modelLoads.get(job)?.id!==id)modelLoads.delete(job);
   const live=list(await remoteJSON('/v1/models',{transport:'openai',timeout:15000}));
   if(live.length===1&&live[0].id===id)return;
-  if((job.meeting||job.meetingSummaryOf)&&live.some(model=>model.id===id))return;
+  if((job.keepChatModel||job.meeting||job.meetingSummaryOf)&&live.some(model=>model.id===id))return;
   try{
     const tj=await remoteJSON('/api/v1/tasks',{timeout:15000});
     const running=Array.isArray(tj)?tj:tj.tasks || tj.data?.tasks || [];
@@ -440,6 +446,7 @@ async function enqueueRun(b,vaultReference){
   if(vaultReference&&vaultReference.connectionId!==j.connectionId)throw new Error('The Tiiny connection changed. Select the Vault excerpt again.');
   if(deviceControl)throw Error('Wait for the device action to finish before starting a run.');
   if(b.roughCut)j.roughCut=b.roughCut;
+  if(b.keepChatModel)j.keepChatModel=true;
   if(b.meeting)j.meeting=b.meeting;
   if(b.meetingSummaryOf){
     if(jobs.some(job=>job.meetingSummaryOf===b.meetingSummaryOf&&['queued','running'].includes(job.status)))throw Error('This meeting already has a summary or minutes draft in progress.');
@@ -618,7 +625,7 @@ async function startQueue(){
     }catch(e){finalStatus=controller.signal.aborted?'cancelled':'failed';job.error=redactError(e);
       const index=job.currentStep || 0;if(!job.film&&!job.recoveringNative&&job.steps[index]&&!metricStore.ids.has(job.id+':'+index))try{await metricStore.add(createMetric({job:{...job,status:finalStatus},step:job.steps[index],index,startedAt:job.startedAt,finishedAt:new Date().toISOString(),executionMs:null,prepareMs:null,connectionId:job.connectionId}));}catch(e){job.metricsError=e.message;}
     }
-    finally{modelLoads.delete(job);if(job.switchModels&&job.originalModels){try{
+    finally{modelLoads.delete(job);if(job.switchModels&&job.originalModels&&!(job.keepChatModel&&finalStatus==='completed')){try{
       job.phase='Restoring your loaded models';await saveJobs().catch(e=>{job.persistenceError='History save needs attention: '+redactError(e);});
       const live=list(await remoteJSON('/v1/models',{transport:'openai'}));
       for(const m of live)if(!job.originalModels.includes(m.id)&&job.steps.some(s=>s.model===m.id)){await remote('/api/v1/models/'+encodeURIComponent(m.id)+'/stop',{method:'POST',body:{},timeout:300000});await waitModel(m.id,false);}
@@ -794,9 +801,7 @@ const server=http.createServer(async(req,res)=>{
       const {model}=await jsonBody(req),connectionId=connectionHash(await config());
       if(typeof model!=='string'||model&&(cached?.connectionId!==connectionId||!cached.models.some(m=>m.id===model&&m.installed&&m.tasks.includes('chat'))))throw Error('Choose a downloaded chat model.');
       const write=chatDefaultsWrite.catch(()=>{}).then(async()=>{
-        const next={...chatDefaults};
-        if(model)next[connectionId]=model;
-        else delete next[connectionId];
+        const next={...chatDefaults,[connectionId]:model};
         await writeJSON('chat-defaults.json',next);chatDefaults=next;
       });
       chatDefaultsWrite=write;
@@ -1211,7 +1216,8 @@ const server=http.createServer(async(req,res)=>{
         if(b.steps.length!==1||step.task!=='chat'||step.promptMode!=='literal'||step.params?._spindleEnhancer)throw Error('A Vault excerpt can be attached to a single chat message.');
         vaultReference=validateVaultReference(b.vaultReference);
       }
-      const j=await enqueueRun({...b,outputs:[],studio:undefined,film:undefined,museum:undefined,soundtrack:undefined,meeting:undefined,meetingSummaryOf:undefined,checkTask:p==='/api/check'?b.checkTask:undefined,benchmark:p==='/api/benchmark'},vaultReference);
+      const keepChatModel=p==='/api/run'&&b.keepChatModel===true&&b.steps.length===1&&b.steps[0].task==='chat'&&b.steps[0].promptMode==='literal';
+      const j=await enqueueRun({...b,keepChatModel,outputs:[],studio:undefined,film:undefined,museum:undefined,soundtrack:undefined,meeting:undefined,meetingSummaryOf:undefined,checkTask:p==='/api/check'?b.checkTask:undefined,benchmark:p==='/api/benchmark'},vaultReference);
       send(res,redactJob(j),202);void startQueue();return;
     }
     if(p.startsWith('/api/cancel/')&&req.method==='POST'){const j=jobs.find(j=>j.id===p.split('/').pop());if(!j)throw new Error('Run not found.');await cancel(j);send(res,{ok:true});return;}
