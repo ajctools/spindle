@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery} from '../web-search.mjs';
+import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery,plannedSearchQuery} from '../web-search.mjs';
 import {chatDetails} from '../public/chat-ui.mjs';
+
+test('search plans accept a query object or bare JSON without using extra model output',()=>{
+  const query='FAA grounding alert';
+  assert.equal(plannedSearchQuery(JSON.stringify({query:` ${query} `,notes:'private model notes'})),query);
+  assert.equal(plannedSearchQuery('```json\r\n'+JSON.stringify({query})+'\r\n```'),query);
+  assert.equal(plannedSearchQuery(JSON.stringify(query)),query);
+  for(const value of [null,{query:null}])assert.equal(plannedSearchQuery(JSON.stringify(value)),'');
+  for(const value of [{notes:query},{query:42},{query:' '},{query:'a'.repeat(501)},[query],true]){
+    assert.throws(()=>plannedSearchQuery(JSON.stringify(value)),/Invalid search query/);
+  }
+  assert.throws(()=>plannedSearchQuery('Search for '+query),SyntaxError);
+});
 
 test('search does not turn workflow handoffs or credentials into provider queries',()=>{
   const key='fixture-device/key',options={prompt:'Private text from a previous step',usesWorkflowData:true,secrets:[key]};
@@ -21,7 +33,7 @@ test('search sends only the explicit query and provider credential to fixed HTTP
   let request;
   const out=await searchWeb({query:'public test',provider:'brave',key:'fixture-search-key',fetcher:async(url,options)=>{request={url,options};return Response.json({web:{results:[{title:'Example',url:'https://example.com',description:'A snippet'}]}});}});
   assert.equal(request.url.origin,'https://api.search.brave.com');assert.equal(request.url.searchParams.get('q'),'public test');assert.equal(request.options.redirect,'error');assert.equal(request.options.headers['X-Subscription-Token'],'fixture-search-key');assert.equal(request.options.headers.Authorization,undefined);
-  assert.equal(out.sources.length,1);assert.ok(!JSON.stringify(out).includes('fixture-search-key'));assert.ok(searchContext(out).content.includes('untrusted snippets'));
+  assert.equal(out.sources.length,1);assert.ok(!JSON.stringify(out).includes('fixture-search-key'));assert.ok(searchContext(out).includes('untrusted snippets'));
   const ddg=await searchWeb({query:'public test',key:'never-send-this',fetcher:async(url,options)=>{assert.equal(url.origin,'https://html.duckduckgo.com');assert.equal(options.headers['X-Subscription-Token'],undefined);return new Response('<a class="result__a" href="https://example.com">Example</a>');}});assert.equal(ddg.provider,'duckduckgo');
 });
 test('failed searches never silently generate an answer or echo raw provider errors',async()=>{
@@ -64,7 +76,7 @@ test('weather chat reads a dated NWS forecast when the search snippet has no for
   assert.equal(forecast.location,'South Portland ME');
   assert.deepEqual(forecast.periods,[{name:'Today',detail:'Sunny, with a high near 57.'},{name:'Tonight',detail:'Cloudy, with a low around 40.'}]);
   assert.ok(Date.now()-Date.parse(forecast.issuedAt)<60_000);
-  assert.match(searchContext(search).content,/high near 57/);
+  assert.match(searchContext(search),/high near 57/);
   assert.match(chatDetails({webSearch:search}),/NWS forecast for South Portland ME.*high near 57/);
 });
 

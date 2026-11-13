@@ -17,6 +17,8 @@ test('all multimodal adapters preserve their request and output contracts',async
   const meetingLoaded=new Set(['fixture/asr']);
   let meetingMode=false;
   let asrLoaded=true,previewRequests=0,summaryMessages,musicAttempts=0;
+  const meshStages=[];
+  const shapeBytes=Buffer.from('saved shape archive fixture');
   const device=http.createServer(async(req,res)=>{
     const parts=[];for await(const p of req)parts.push(p);const raw=Buffer.concat(parts),url=new URL(req.url,'http://fixture'),p=url.pathname;
     const json=j=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(j));};
@@ -64,9 +66,37 @@ test('all multimodal adapters preserve their request and output contracts',async
     if(p==='/v1/systemone'){seen.add('decision');return json({answers:{route:{choice:'billing'}}});}
     if(p==='/v1/videos'&&req.method==='POST'){seen.add('video');return json({id:'video_fixture',status:'completed',progress:100,frames:22,width:832,height:480,fps:24,seconds:'0.875',usage:{input_tokens:20,output_tokens:180,total_tokens:200}});}
     if(p==='/v1/videos/video_fixture/content'){const b=Buffer.alloc(16);b.write('ftyp',4);return binary(b,'video/mp4');}
-    if(p==='/v1/3d/tasks'&&req.method==='POST'){seen.add('mesh');return json({data:{task_id:'mesh_fixture',status:'completed'}});}
-    if(p==='/v1/3d/tasks/mesh_fixture/artifacts')return json({data:{artifacts:[{artifact_id:'shape',filename:'shape.glb'}]}});
-    if(p==='/v1/3d/tasks/mesh_fixture/artifacts/shape'){const b=Buffer.alloc(16);b.write('glTF');return binary(b,'application/octet-stream');}
+    if(p.startsWith('/v1/3d/'))assert.equal(url.searchParams.get('model'),'fixture/mesh');
+    if(p==='/v1/3d/capabilities')return json({data:{stages:['shape','texture','export'],input_refs:true,stage_specs:{
+      texture:{required_inputs:['shape_artifact']},export:{required_inputs:['shape_artifact','material_artifact'],optional_inputs:['mesh_glb']}
+    }}});
+    if(p==='/v1/3d/tasks'&&req.method==='POST'){
+      seen.add('mesh');
+      const stage=raw.toString().match(/name="stage"\r\n\r\n(\w+)/)?.[1];
+      meshStages.push(stage);
+      if(stage==='shape')assert.ok(raw.includes('name="image"'));
+      else{
+        assert.ok(raw.includes('name="shape_artifact"'));
+        assert.ok(raw.includes(shapeBytes));
+        assert.ok(!raw.includes('name="image"'));
+        if(stage==='export'){
+          const refs=raw.toString().match(/name="input_refs"\r\n\r\n([^\r]+)/);
+          assert.deepEqual(JSON.parse(refs[1]),{material_artifact:{task_id:'mesh_texture',artifact_id:'material'}});
+        }
+      }
+      return json({data:{task_id:'mesh_'+stage,status:'completed'}});
+    }
+    if(p==='/v1/3d/tasks/mesh_shape/artifacts')return json({data:{artifacts:[
+      {artifact_id:'preview',artifact_type:'shape_preview',filename:'shape.glb'},
+      {artifact_id:'shape',artifact_type:'shape',filename:'shape.zip'}
+    ]}});
+    if(p==='/v1/3d/tasks/mesh_texture/artifacts')return json({artifacts:[{artifact_id:'material',artifact_type:'material',filename:'material.zip'}]});
+    if(p==='/v1/3d/tasks/mesh_export/artifacts')return json({artifacts:[{artifact_id:'export',artifact_type:'mesh_glb',filename:'textured.glb'}]});
+    if(p==='/v1/3d/tasks/mesh_shape/artifacts/shape')return binary(shapeBytes,'application/zip');
+    if(p==='/v1/3d/tasks/mesh_texture/artifacts/material')return binary(Buffer.from('material archive fixture'),'application/zip');
+    if(['/v1/3d/tasks/mesh_shape/artifacts/preview','/v1/3d/tasks/mesh_export/artifacts/export'].includes(p)){
+      const b=Buffer.alloc(16);b.write('glTF');return binary(b,'application/octet-stream');
+    }
     res.statusCode=404;json({error:'Unknown fixture route '+p});
   });await new Promise(r=>device.listen(0,'127.0.0.1',r));
   const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,SPINDLE_PORT:'18439',SPINDLE_DATA_DIR:data,TIINY_HOST:'http://127.0.0.1:'+device.address().port,TIINY_KEY:'adapter-key'},stdio:'ignore'}),base='http://127.0.0.1:18439';
@@ -115,8 +145,21 @@ test('all multimodal adapters preserve their request and output contracts',async
         if(['completed','failed'].includes(run?.status))return run;
         await pause(40);
       }
-      assert.fail('Meeting run did not finish.');
+      assert.fail('Run did not finish.');
     };
+    const meshIndex=job.outputs.findIndex(o=>o.task==='mesh'),shape=job.outputs[meshIndex];
+    assert.equal(shape.canApplyTexture,true);
+    assert.deepEqual(meshStages,['shape']);
+    assert.equal((await post('/api/mesh/texture',{id:job.id,step:0})).status,400);
+    const texture=await post('/api/mesh/texture',{id:job.id,step:meshIndex});
+    assert.equal(texture.status,202);
+    const textured=await waitForRun((await texture.json()).id);
+    assert.equal(textured.status,'completed',textured.error);
+    assert.deepEqual(meshStages,['shape','texture','export']);
+    assert.equal(textured.outputs[1].assets[0].mime,'model/gltf-binary');
+    assert.equal(textured.outputs[1].canApplyTexture,false);
+    assert.ok((await get(shape.assets[0].url)).ok);
+    assert.ok((await get(textured.outputs[1].assets[0].url)).ok);
     meetingMode=true;
     const recording=await post('/api/meeting/transcribe',{title:'Fixture meeting',model:'fixture/asr',file:audio});
     assert.equal(recording.status,202);

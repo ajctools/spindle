@@ -72,18 +72,24 @@ test('stream decoder handles split UTF-8, CRLF boundaries, reasoning, usage and 
   assert.equal(result.json.usage.prompt_tokens_details.cached_tokens,0);
 });
 test('chat context shows live text estimates and replaces them with reported usage',()=>{
-  const live=chatRunStats({chatProgress:{context:65536,estimatedInput:19000,estimatedOutput:100,outputTps:2}},{context:32768});
+  const live=chatRunStats({chatProgress:{context:65536,estimatedInput:19000,estimatedOutput:100,estimatedOutputTps:2}},{context:32768});
   assert.equal(live.context,65536);
   assert.equal(live.used,19100);
   assert.equal(live.ratio,19100/65536);
   assert.equal(live.estimated,true);
-  assert.match(live.rate,/^≈/);
+  assert.equal(live.rate,'≈2 t/s (estimate)');
   assert.equal(live.cache,'—');
   const final=chatRunStats({outputs:[{task:'chat',context:65536,metrics:{inputTokens:19000,outputTokens:124,cachedTokens:0,decodeTps:2}}]});
   assert.equal(final.used,19124);
   assert.equal(final.estimated,false);
   assert.equal(final.cache,'0 (0%)');
-  assert.equal(final.rate,'2 t/s');
+  assert.equal(final.rate,'2 t/s (Tiiny decode)');
+  assert.equal(chatRunStats({chatProgress:{cachedTokens:80,inputTokens:100}}).cache,'80 (80%)');
+  assert.equal(chatRunStats({chatProgress:{decodeTps:24}}).rate,'24 t/s (Tiiny decode)');
+  assert.equal(chatRunStats({chatProgress:{estimatedInput:20}}).rate,'—');
+  const timing={durationMs:1000,estimatedOutput:150};
+  assert.equal(chatRunStats({outputs:[{task:'chat',chatTiming:timing,metrics:{outputTokens:100}}]}).rate,'100 t/s (response avg)');
+  assert.equal(chatRunStats({outputs:[{task:'chat',chatTiming:timing}]}).rate,'≈150 t/s (estimate)');
   assert.equal(chatRunStats({chatProgress:{context:65536,estimatedOutput:30}}).ratio,null);
 });
 test('chat handles JSON responses and fails visibly on interrupted or invalid streams',async()=>{

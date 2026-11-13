@@ -20,13 +20,17 @@ export function chatRunStats(job,model){
   const cache=count(usage?.cachedTokens);
   const reportedRate=count(usage?.decodeTps);
   const duration=final?.chatTiming?.durationMs;
-  const rate=reportedRate??count(live?.outputTps)??(duration>0&&generatedUsed!=null?generatedUsed*1000/duration:null);
+  const responseRate=duration>0&&generated!=null?generated*1000/duration:null;
+  const estimatedRate=count(final?.chatTiming?.estimatedOutputTps??live?.estimatedOutputTps)
+    ??(duration>0&&generatedUsed!=null?generatedUsed*1000/duration:null);
+  const rate=reportedRate??responseRate??estimatedRate;
+  const rateLabel=reportedRate!=null?'Tiiny decode':responseRate!=null?'response avg':'estimate';
   return {
     context,used,ratio,estimated,
     tokens:(used==null?'—':(estimated?'≈':'')+compactTokens.format(used))+' / '+(context==null?'—':compactTokens.format(context)),
     percent:ratio==null?'—':new Intl.NumberFormat(undefined,{style:'percent',maximumFractionDigits:1}).format(ratio),
     cache:cache==null?'—':compactTokens.format(cache)+(input>0?' ('+Math.round(100*cache/input)+'%)':''),
-    rate:rate==null?'—':(reportedRate!=null?'':final&&generated!=null?'avg ':'≈')+rate.toLocaleString(undefined,{maximumFractionDigits:1})+' t/s',
+    rate:rate==null?'—':(rateLabel==='estimate'?'≈':'')+rate.toLocaleString(undefined,{maximumFractionDigits:1})+' t/s ('+rateLabel+')',
   };
 }
 
@@ -145,8 +149,9 @@ export function chatDetails(out,part='all'){
     const excerpt=forecast?`<p><strong>NWS forecast for ${esc(forecast.location)}</strong> · Issued ${esc(new Date(forecast.issuedAt).toLocaleString())} (your time)</p><ul>${forecast.periods.map(period=>`<li><strong>${esc(period.name)}</strong> · ${esc(period.detail)}</li>`).join('')}</ul>`:`<p>${esc(s.snippet)}</p>`;
     return `<li><a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(s.title || url.hostname)} ↗</a>${excerpt}</li>`;
   }).join('')}</ol></details>`:'';
+  const searchWarning=out.webSearchWarning?`<p class="notice"><strong>Tiiny reply without web sources.</strong> ${esc(out.webSearchWarning)}</p>`:'';
   const limit=Number.isSafeInteger(out.responseLimit)&&out.responseLimit>0?out.responseLimit:null;
   const advice=!out.text&&out.reasoning?'Thinking used the available budget before an answer arrived. Choose a larger <strong>Maximum response tokens</strong> value and resend your prompt. Lower reasoning effort or turn thinking off if your model supports it.':'Choose a larger <strong>Maximum response tokens</strong> value, then ask the model to continue. Thinking can share the output budget.';
   const warning=out.finishReason==='length'?`<p class="notice">${limit?'The response reached its requested '+limit.toLocaleString()+'-token limit.':out.responseLimit===null?'Tiiny stopped this response at a runtime output or context limit. Spindle did not set a token cap.':'The runtime stopped this response at a token or context limit.'} ${advice} The model’s context window and firmware still apply.</p>`:'';
-  return part==='thinking'?reasoning:part==='sources'?sources+warning:reasoning+sources+warning;
+  return part==='before'?searchWarning+reasoning:part==='sources'?sources+warning:searchWarning+reasoning+sources+warning;
 }

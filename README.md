@@ -14,7 +14,7 @@ Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, 
 > - **Do not expose the helper server to the internet or other users.** There is no multi-user login. Docker packaging is **not implemented**.
 > - **Data stays private only if you handle it privately.** Runs, media, inventories, and exports can contain sensitive information. Never publish `data/`, actual environment files, or CLI configuration.
 >
-> - **Web search is external and starts enabled.** The explicit query or current prompt goes to DuckDuckGo or Brave over HTTPS. **Send to Tiiny only** skips web search for one message. Conversation history, image attachments, Vault excerpts, and the Tiiny key stay out of the search request. Queries and results remain in local run history.
+> - **Web search is external and starts enabled.** In Chat, an explicit or Tiiny-generated query goes to DuckDuckGo or Brave over HTTPS. **Send to Tiiny only** skips web search for one message. Conversation history, image attachments, Vault excerpts, and the Tiiny key stay out of the search request. Queries and results remain in local run history.
 >
 > Read [Security & privacy](docs/SECURITY.md). A local audit is not a guarantee that every vulnerability has been found.
 
@@ -58,7 +58,7 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 | Images | Generate an image or use a supported reference-image model |
 | Transcribe / Speech / Music | Convert recordings to text, synthesize speech, try reference-voice cloning on compatible models, and generate music |
 | Video | Generate a clip or animate a starting image, with job progress and saved output |
-| Documents / 3D | Extract document text/layout or create shape artifacts from an image |
+| Documents / 3D | Extract document text/layout or create 3D shapes from images and texture compatible saved shapes |
 | Classify / Embed / Rerank | Evaluate structured questions, produce vectors, and rank candidate documents |
 | Meeting Desk | Record or import audio, follow a timestamped transcript, and verify decisions and action items before export |
 | PromptDex & Search Spindle | Prepare reusable prompts, compare two models, and find saved work across the app |
@@ -100,7 +100,7 @@ The generated museum also offers two Tiiny-made surface textures, using supplied
 
 Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
 
-**Search the web before each message** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification; Brave Search uses a separate API key. The query is editable, sources are shown with links and retrieval time, and a failed search stops the run. For weather queries, Spindle can look up a U.S. city and state or ZIP code with the National Weather Service and include its dated forecast periods. Other results supply snippets. Citations are model-generated, so check the linked sources. No SDK is required.
+**Search the web when useful** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification. Brave Search uses a separate API key. Tiiny decides whether to search and writes a short query unless you enter one yourself. Spindle shows source links and retrieval time, and labels chat replies that continue without sources after a search failure. For weather queries, Spindle can look up a U.S. city and state or ZIP code with the National Weather Service and include its dated forecast periods. Other results supply snippets. Citations are model-generated, so check the linked sources. No SDK is required.
 
 ![Chat generating a reply with elapsed time, a context meter, generation speed, and cache hits](docs/images/chat.jpg)
 
@@ -155,4 +155,4 @@ Run `node --test test/*.test.mjs` for isolated tests with fabricated credentials
 
 Build a clean source release with `node scripts/release.mjs --out <new-directory>`. The builder copies an explicit manifest and checks known local identifiers and credential patterns. Publish only that clean folder or its archive.
 
-MIT licensed. See [LICENSE](LICENSE). Current limitations include sequential workflows, no automatic branching/tool execution, a shape-stage 3D adapter, and no guarantee of model restoration after a terminated server.
+MIT licensed. See [LICENSE](LICENSE). Current limitations include sequential workflows, no automatic branching/tool execution, geometry-only inline 3D previews, and no guarantee of model restoration after a terminated server.
