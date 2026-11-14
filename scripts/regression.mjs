@@ -51,6 +51,10 @@ function browserSession(ws,errors){
     const finish=pending.get(message.id);
     if(finish){pending.delete(message.id);finish(message);}
   };
+  ws.onclose=()=>{
+    for(const finish of pending.values())finish({error:{message:'Browser connection closed'}});
+    pending.clear();
+  };
   return (method,params={})=>new Promise((resolve,reject)=>{
     const id=++sequence;
     const timer=setTimeout(()=>{pending.delete(id);reject(Error(`Browser command timed out: ${method}`));},10000);
@@ -86,7 +90,7 @@ async function smokeBrowser(profile){
   const demo=spawn(process.execPath,['scripts/preview-demo.mjs'],{...spawnOptions,detached,env:{...process.env,TMPDIR:temp,TMP:temp,TEMP:temp,SPINDLE_DEMO_PORT:String(port)},stdio:'inherit'});
   let demoError;
   demo.once('error',error=>{demoError=error;});
-  let chrome,ws;
+  let chrome,ws,closeBrowser;
   try{
     await waitFor('synthetic preview',async()=>{
       if(demoError)throw demoError;
@@ -106,6 +110,8 @@ async function smokeBrowser(profile){
     ws=new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
     const errors=[],call=browserSession(ws,errors);
+    // Edge on Windows can re-launch itself under a different PID.
+    closeBrowser=()=>call('Browser.close');
     const evaluate=async expression=>{
       const {result,exceptionDetails}=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});
       assert.ok(!exceptionDetails,exceptionDetails?.exception?.description??expression);
@@ -163,6 +169,7 @@ async function smokeBrowser(profile){
     assert.deepEqual(errors,[],'Browser exceptions');
     console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, workspace navigation, device settings, dialogs, cost filters, and meeting draft import and retention.');
   }finally{
+    if(ws?.readyState===WebSocket.OPEN)await closeBrowser?.().catch(()=>{});
     ws?.close();
     await stopTree(chrome);
     await stopTree(demo);
