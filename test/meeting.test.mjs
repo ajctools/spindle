@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {meetingRecording,meetingChunk,meetingSummaryStep} from '../meeting.mjs';
 import {meetingLines,meetingMatches,meetingQuery} from '../public/meeting-desk.mjs';
+import {previewText} from '../public/meeting-transcript.mjs';
 
 test('Meeting Desk splits a recording at sample boundaries and preserves the final short chunk',async()=>{
   const header=Buffer.alloc(44),audio=Buffer.alloc(61*32000);
@@ -20,12 +21,34 @@ test('Meeting Desk splits a recording at sample boundaries and preserves the fin
   try{
     const recording=path.join(temp,'fixture.wav');await fs.writeFile(recording,data);
     assert.equal(meetingRecording(await meetingChunk(recording,0)).duration,60);
+    assert.equal(await meetingChunk(recording,0,{skipQuiet:true}),null);
     const tail=meetingRecording(await meetingChunk(recording,1));
     assert.equal(tail.duration,1);assert.equal(tail.buffer.readInt16LE(44),1234);
+    assert.ok(await meetingChunk(recording,1,{skipQuiet:true}));
     await assert.rejects(meetingChunk(recording,2),/no audio/);
     data.writeUInt32LE(0,40);
     assert.throws(()=>meetingRecording({...file,data:'data:audio/wav;base64,'+data.toString('base64')}),/prepared/);
   }finally{await fs.rm(temp,{recursive:true,force:true});}
+});
+
+test('Meeting Desk accepts normalized audio through 30 minutes without changing other upload limits',()=>{
+  const buffer=Buffer.alloc(44+1800*32000);
+  buffer.write('RIFF');buffer.writeUInt32LE(buffer.length-8,4);buffer.write('WAVEfmt ',8);
+  buffer.writeUInt32LE(16,16);buffer.writeUInt16LE(1,20);buffer.writeUInt16LE(1,22);
+  buffer.writeUInt32LE(16000,24);buffer.writeUInt32LE(32000,28);buffer.writeUInt16LE(2,32);
+  buffer.writeUInt16LE(16,34);buffer.write('data',36);buffer.writeUInt32LE(buffer.length-44,40);
+  const file={name:'fixture.wav',data:'data:audio/wav;base64,'+buffer.toString('base64')};
+  const result=meetingRecording(file);
+  assert.equal(result.duration,1800);
+  assert.equal(result.chunks,30);
+  assert.throws(()=>meetingRecording(file,20),/20 seconds or shorter/);
+});
+
+test('preview suppresses decoder loops and oversized text while preserving ordinary and multilingual speech',()=>{
+  assert.deepEqual(previewText('A sentence. '+ 'the top of '.repeat(42)+'Then we moved on.'),{text:'',unreliable:true});
+  assert.deepEqual(previewText('word '.repeat(801)),{text:'',unreliable:true});
+  for(const text of ['Go, go, go. We have to hurry.', '请打开录音。'])assert.deepEqual(previewText(text),{text});
+  assert.deepEqual(previewText('   '),{text:''});
 });
 
 test('Meeting Desk offsets device timestamps and falls back to a chunk when timing is unreported',()=>{

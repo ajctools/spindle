@@ -1,7 +1,7 @@
 import {mountDashboard,stopDashboard,refreshDashboard} from './dashboard.js';
 import {transcriptionFile} from './audio.js';
 import {guides,essentials,workflowTips,workspaceTips,recovery,workflowWarnings,voiceCloneModel,voiceReferenceSample} from './guidance.mjs';
-import {chatDetails,chatMarkdown,chatRunStats} from './chat-ui.mjs';
+import {chatAppSource,chatDetails,chatMarkdown,chatReply,chatRunStats,isChatRun,restoreChat} from './chat-ui.mjs';
 import {chatAttachmentText,maxTextBytes,maxTextFiles,pasteThreshold,readTextAttachments,validateTextAttachments} from './chat-attachments.mjs';
 import {downloadArtifact} from './artifact-download.mjs';
 import {meshPreviewHTML,installMeshPreviews} from './mesh-preview.mjs';
@@ -20,9 +20,11 @@ const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>(
 const {createWorkshops}=await import('./workshops.mjs').catch(()=>({createWorkshops:()=>({mount(element){element.innerHTML='<p class="help">Restart the helper to load the soundtrack and museum workflows.</p>';},update(){},adoptVideo(){}})}));
 const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=null,page='workbench',task='chat',selectedModel='',currentJob=null,chat=[],runs=[],saved=[],workflow={name:'Untitled workflow',steps:[]};
-let chatModel='';
+let chatModel='',chatRunId=null;
 let filters={q:'',type:'all',status:'all'},connectionInfo=null,sampleInput=null,exampleUndo=null;
 let chatStorage;try{chatStorage=window.localStorage;}catch{}
+const chatRunKey='spindle-last-chat-run';
+let pendingChatRestore;try{pendingChatRestore=chatStorage?.getItem(chatRunKey);}catch{}
 let chatOptions=loadChatOptions(chatStorage);
 let warmingChatModel='';
 let warmChatError=null;
@@ -36,10 +38,10 @@ const searchPages=[...document.querySelectorAll('#nav [data-page],#nav [data-ope
 searchPages.push(...Object.entries(deviceSections).filter(([id])=>id!=='device').map(([id,title])=>({type:'page',id,title})));
 const icons={chat:'◈',image:'▧',asr:'≋',speech:'◖',music:'♫',video:'▷',ocr:'▤',mesh:'⬡',decision:'⑂',embed:'∷',rerank:'↕'};
 const descriptions={chat:'Think, write, code, and understand images.',image:'Generate an image or work from a reference.',asr:'Turn a recording into text.',speech:'Give your words a voice.',music:'Compose from a description and optional lyrics.',video:'Create a clip from a prompt or animate an image.',ocr:'Extract text and document layout from an image.',mesh:'Turn an image into a 3D shape.',decision:'Evaluate structured questions and route a request.',embed:'Turn text into vectors for retrieval.',rerank:'Sort candidate documents by relevance.'};
-async function api(url,body){
-  const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};
+async function api(url,body,{signal}={}){
+  const options=body===undefined?{signal}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal};
   let r=await fetch(url,options);
-  if(r.status===403){await fetch('/api/session');r=await fetch(url,options);}
+  if(r.status===403){await fetch('/api/session',{signal});r=await fetch(url,options);}
   const j=await r.json();if(!r.ok)throw new Error(j.error || 'Request failed');return j;
 }
 installMeshPreviews();
@@ -63,6 +65,32 @@ async function copyText(value,kind){
   }
 }
 bind('#copy-dialog','close',()=>{$('#copy-content').value='';});
+function appPreviewButton(output,runId,step){
+  if(!runId||!chatAppSource(output))return '';
+  const url='/api/chat/preview?'+new URLSearchParams({id:runId,step});
+  return `<button type="button" class="button" data-preview-app="${esc(url)}" aria-controls="chat-app-preview">Open app preview</button>`;
+}
+let previewTrigger;
+function closeAppPreview(restoreFocus=false){
+  $('#chat-app-preview').hidden=true;
+  document.body.classList.remove('chat-app-open');
+  $('#chat-app-preview-content').replaceChildren();
+  if(restoreFocus)previewTrigger?.focus();
+  previewTrigger=null;
+}
+function openAppPreview(button){
+  const frame=document.createElement('iframe');
+  frame.title='Generated app';
+  frame.setAttribute('sandbox','allow-scripts');
+  frame.referrerPolicy='no-referrer';
+  frame.src=button.dataset.previewApp;
+  previewTrigger=button;
+  $('#chat-app-preview').hidden=false;
+  document.body.classList.add('chat-app-open');
+  $('#chat-app-preview-content').replaceChildren(frame);
+  $('#close-chat-app-preview').focus();
+}
+bind('#close-chat-app-preview','click',()=>closeAppPreview(true));
 function fail(e){const tip=recovery(e.message);toast(tip.title);const slot=$('#action-error') || $('#workflow-feedback');if(slot){slot.innerHTML=recoveryHTML(e.message);slot.scrollIntoView({block:'nearest',behavior:'smooth'});}}
 function bind(s,event,fn){const el=$(s);if(el)el.addEventListener(event,fn);}
 function fmtSize(n){return n?(n/1073741824).toFixed(1)+' GiB':'Size not reported';}
@@ -72,7 +100,20 @@ function modelOptions(t,id,all=false){const ms=compatible(t,!all);return '<optio
 function preferred(t){return compatible(t,true).find(m=>m.loaded)?.id || compatible(t,true)[0]?.id || '';}
 function preferredChatModel(){
   const models=compatible('chat',true);
+  if(chatRunId&&chatModel&&!models.some(m=>m.id===chatModel))return '';
   return models.find(m=>m.id===chatModel)?.id || models.find(m=>m.loaded)?.id || models.find(m=>m.id===state.defaultChatModel)?.id || models[0]?.id || '';
+}
+function rememberChatRun(id){
+  chatRunId=id;pendingChatRestore=null;
+  try{if(id)chatStorage?.setItem(chatRunKey,id);else chatStorage?.removeItem(chatRunKey);}catch{}
+}
+function openChatRun(run){
+  rememberChatRun(run.id);
+  chatModel=run.steps[0].model;
+  chat=restoreChat(run,runs);
+  chatOptions.query='';
+  task='chat';page='workbench';sampleInput=null;exampleUndo=null;
+  show();scrollConversation();
 }
 function taskOptions(id){return Object.entries(state.tasks).map(([k,t])=>`<option value="${k}" ${id===k?'selected':''}>${esc(t.label)}</option>`).join('');}
 const studio=createStudio({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
@@ -103,6 +144,7 @@ function renderNavigation(){
   document.querySelectorAll('[data-device-section]').forEach(button=>button.onclick=()=>{page=button.dataset.deviceSection;show();});
 }
 function show(){
+  if(!$('#chat-app-preview').hidden)closeAppPreview();
   if(page!=='meeting')meetingDesk?.leave();
   if(page!=='library')librarySelection='';
   stopDashboard();
@@ -144,15 +186,16 @@ async function openMeetingDesk(result){
   }
   if(page==='meeting'){
     if(!$('#view .meeting-desk'))meetingDesk.mount($('#view'));
+    else meetingDesk.update();
     if(result)meetingDesk.openRun(result.id,result.at);
   }
 }
 function dashboardPage(){mountDashboard($('#view'),{api,getState:()=>state,navigate:next=>{page=next;show();},toast});}
-const traceNames={chat:'Tiiny inference',search:'Web search',forecast:'Weather forecast',check:'Device API check'};
-const traceProviders={'https://html.duckduckgo.com':'DuckDuckGo','https://api.search.brave.com':'Brave Search','https://forecast.weather.gov':'National Weather Service'};
+const traceNames={chat:'Tiiny inference',search:'Web search',forecast:'Weather forecast',page:'Source page',check:'Device API check'};
+const traceProviders={'https://html.duckduckgo.com':'DuckDuckGo','https://api.search.brave.com':'Brave Search','https://forecast.weather.gov':'National Weather Service','https://feeds.bbci.co.uk':'BBC News','https://www.cbsnews.com':'CBS News'};
 const traceCount=(n,singular,plural=singular+'s')=>n+' '+(n===1?singular:plural);
 function traceOverview(events){
-  const external=events.filter(event=>['search','forecast'].includes(event.kind));
+  const external=events.filter(event=>['search','forecast','page'].includes(event.kind));
   const device=events.filter(event=>['chat','check'].includes(event.kind));
   const plaintext=device.filter(event=>event.protocol==='http:');
   const responses=events.filter(event=>event.outcome==='headers');
@@ -187,9 +230,10 @@ function traceTimeline(events,active){
     const format=event.responseType==='SSE'?'Model stream':event.responseType==='HTML'&&event.kind==='search'?'Search results page':event.responseType;
     const apiHTML=event.responseType==='HTML'&&['chat','check'].includes(event.kind);
     const result=hasHeaders?`HTTP ${event.status} · ${format} · headers in ${event.headersMs} ms`
+      :event.kind==='page'?'Public HTTPS request attempted'
       :event.outcome==='pending'?(active?'Waiting for response headers':'No response headers captured')
       :({aborted:'Request canceled',timeout:'Request timed out'})[event.outcome]||'Request failed before response headers';
-    const external=['search','forecast'].includes(event.kind);
+    const external=['search','forecast','page'].includes(event.kind);
     const transport=event.protocol==='http:'?'Plaintext HTTP':'HTTPS';
     const tags=[
       event.unexpected?'Unexpected origin':'',
@@ -294,6 +338,7 @@ function extraFields(){
 function workbench(){
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
   let textAttachments=[],readingAttachments=false,pasteCount=0,renderAttachments;
+  if(isChat&&chatRunId)currentJob=chatRunId;
   if(isChat)selectedModel=preferredChatModel();
   else if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=preferred(task);
   const hasVault=isChat&&!state.demo&&vaultAttachment;
@@ -388,36 +433,54 @@ function workbench(){
     };
   }
   renderSampleStatus();
-  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chatModel=selectedModel;chat=[];vault?.clear();currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
+  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chatModel=selectedModel;chat=[];vault?.clear();rememberChatRun(null);currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
   if(task==='chat')bindChatControls();
-  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';currentJob=null;workbench();});
+  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';rememberChatRun(null);currentJob=null;workbench();});
   bind('#task-form','submit',async e=>{
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
     const tiinyOnly=e.submitter?.id==='send-tiiny-only';
     const vaultReference=vault?.reference;
     const prompt=form.querySelector('#prompt'),input=prompt?.value || '',attachments=[...textAttachments];
+    const conversation=chat,previousChatRunId=chatRunId;
     const messages=isChat?chat.map(({role,content,attachments})=>({role,content:chatAttachmentText(content,attachments)})):[],switchModels=form.querySelector('#auto-model').checked;
     disableSend(form,true);
     try{
       if(readingAttachments)throw Error('Wait for the text files to finish attaching.');
       const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
       if(chatStep&&!input.trim()&&!attachments.length)throw Error('Enter a prompt or attach a text file.');
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages,...(attachments.length?{attachments}:{})}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages,...(attachments.length?{attachments}:{})}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(chatStep&&previousChatRunId?{previousChatRunId}:{}),...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
+      if(chatStep&&conversation===chat){
+        rememberChatRun(j.id);chatModel=s.model;
+        chat.push({role:'user',content:input,attachments,vaultSource:vaultReference?.name});
+      }
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
       if(chatStep){
-        chatModel=s.model;chat.push({role:'user',content:input,attachments,vaultSource:vaultReference?.name});
         if(vaultReference&&vault?.reference===vaultReference)vault.clear();
         if(prompt.value===input)prompt.value='';
         textAttachments=textAttachments.filter(file=>!attachments.includes(file));
         renderAttachments('');
         resizePrompt();
       }
-      if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(j);scrollConversation();poll();
+      if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(runs.find(run=>run.id===j.id)??j);scrollConversation();poll();
     }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
   });
-  bind('#check-model','click',async()=>{try{if(!selectedModel)throw new Error('Choose a downloaded model.');const j=await api('/api/check',{task,model:selectedModel,switchModels:$('#auto-model').checked});currentJob=j.id;toast('A sample check is queued. Its result will be recorded in Device readiness.');poll();}catch(e){fail(e);}});
+  const checkModel=async speechMode=>{
+    const form=$('#task-form');
+    try{
+      if(!selectedModel)throw Error('Choose a downloaded model.');
+      const run=await api('/api/check',{task,model:selectedModel,switchModels:$('#auto-model').checked,speechMode});
+      if(form===$('#task-form')){currentJob=run.id;renderCurrent(runs.find(item=>item.id===run.id)??run);}
+      toast('A sample check is queued. Its result will be recorded in Device readiness.');void poll();
+    }catch(error){if(form===$('#task-form'))fail(error);else toast(error.message);}
+  };
+  bind('#check-model','click',()=>checkModel());
+  if(task==='speech'){
+    const plainCheck=document.createElement('button');plainCheck.type='button';plainCheck.className='button quiet';plainCheck.textContent='Test plain speech';
+    plainCheck.onclick=()=>checkModel('plain');
+    $('#check-model').after(plainCheck);
+  }
   bind('#add-workflow','click',async()=>{try{const s=await getStep(false),needsVoiceReference=s.task==='speech'&&!!s.file;workflow.steps.push({...s,file:undefined,fileFrom:needsVoiceReference||['asr','ocr','mesh'].includes(s.task)?'input':'none',prompt:$('#prompt')?.value || '{{input}}'});toast(needsVoiceReference?'Speech step added. Supply its reference recording as the workflow’s starting file.':textAttachments.length?'Chat step added. Text attachments are available when you send from Chat.':'Added a '+state.tasks[s.task].label.toLowerCase()+' step. Open Workflows to connect it.');}catch(e){fail(e);}});
   if(task==='video'){const preview=()=>{for(const id of ['seconds','size']){const e=$('#'+id);if(e)e.disabled=$('#video-preview').checked;}};bind('#video-preview','change',preview);preview();}
   bind('#runtime','click',async()=>{try{const j=await api('/api/runtime?task='+task+'&model='+encodeURIComponent(selectedModel));$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output').innerHTML='<div class="output-meta">RUNTIME DEFAULTS · READ FROM DEVICE</div><pre>'+esc(JSON.stringify(j,null,2))+'</pre>';$('#output-status').textContent='Runtime info';}catch(e){fail(e);}});
@@ -484,7 +547,7 @@ function chatOptionsStatus(){
   const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
   searchNotice.classList.toggle('search-enabled',chatOptions.search);
   searchNotice.hidden=!chatOptions.search;
-  searchNotice.textContent=paused?'Search is paused for this message. Enter a separate search query in Chat options to use the web with text attachments.':chatOptions.search?`Send ${explicitQuery?'shares your search query':'may share a query Tiiny generates from this message'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.`:'';
+  searchNotice.textContent=paused?'Search is paused for this message. Enter a separate search query in Chat options to use the web with text attachments.':chatOptions.search?`Send ${explicitQuery?'shares your search query':'may share a query Tiiny generates from this message'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.${explicitQuery?'':' Headline lookups may fetch public publisher feeds.'}`:'';
   const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...(attachedText?['the attached text']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
   const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
   deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search&&!paused?'Search results go to Tiiny when used. ':''}Runs save locally.`;
@@ -534,7 +597,7 @@ function renderChat(){
     const user=message.role==='user';
     return `<article class="chat-message ${user?'from-user':'from-assistant'}"><strong>${user?'You':'Spindle'}</strong>${message.vaultSource?'<div class="small muted">Vault · '+esc(message.vaultSource)+'</div>':''}
       ${user?(message.content?'<div class="output-text">'+esc(typeof message.content==='string'?message.content:'[Image message]')+'</div>':'')+textAttachmentDetails(message.attachments):chatDetails(message,'before')+chatMarkdown(message.content)+chatDetails(message,'sources')}
-      ${copyButton(message.content,user?'prompt':'reply')}</article>`;
+      ${copyButton(message.content,user?'prompt':'reply')}${user?'':appPreviewButton({task:'chat',text:message.content,finishReason:message.finishReason},message.runId,message.step)}</article>`;
   }).join(''):'';
   if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;
 }
@@ -625,18 +688,20 @@ function outputHTML(out,{partial=false}={}) {
   const copy=out.assets?.length?'':copyButton(json??out.text,structured?'JSON':out.task==='chat'?'reply':'result');
   return `<div class="output-block"><div class="output-meta">${esc(state?.tasks[out.task]?.label || out.task || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'before'):''}${structured || (out.text?(out.task==='chat'&&!partial?chatMarkdown(out.text):`<div class="output-text">${esc(out.text)}</div>`):'')}${out.task==='chat'?chatDetails(out,'sources'):''}${copy}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(json)}</pre></details>`:''}</div>`;
 }
-let handled=new Set();
 function renderCurrent(j){
   if(!$('#output'))return;disableSend($('#task-form'),['queued','running'].includes(j.status));$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
   renderChatStats(j);
   let completedAnswer=false;const conversation=$('#conversation'),follow=conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
-  $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.status==='completed';
-  const thinkingOpen=[...$('#output').querySelectorAll('[data-chat-panel]')].map(el=>el.open);$('#output').innerHTML=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+(j.partial?outputHTML(j.partial,{partial:true}):'')+(j.error?recoveryHTML(j.error):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
+  $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.id===chatRunId&&j.status==='completed';
+  const thinkingOpen=[...$('#output').querySelectorAll('[data-chat-panel]')].map(el=>el.open);$('#output').innerHTML=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+(j.partial?outputHTML(j.partial,{partial:true}):'')+(j.error?recoveryHTML(j.error,j.audioFailure):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
   $('#output').querySelectorAll('[data-chat-panel]').forEach((el,i)=>el.open=thinkingOpen[i] || false);
   bind('#stop-current','click',()=>api('/api/cancel/'+j.id,{}).then(()=>toast('Stop requested.')).catch(fail));
   if(j.status==='completed'){
     const out=j.outputs.at(-1);
-    if(!handled.has(j.id)){handled.add(j.id);completedAnswer=true;if(out?.task==='chat'){chat.push({role:'assistant',content:out.text,reasoning:out.reasoning,webSearch:out.webSearch,webSearchWarning:out.webSearchWarning,finishReason:out.finishReason,responseLimit:out.responseLimit});renderChat();chatOptionsStatus();completedAnswer=true;}}
+    if(task==='chat'&&j.id===chatRunId&&!chat.some(message=>message.runId===j.id)){
+      const reply=chatReply(j);
+      if(reply){chat.push(reply);renderChat();chatOptionsStatus();completedAnswer=true;}
+    }
     if(out?.assets?.some(a=>a.mime.startsWith('image/'))){const btn=document.createElement('button');btn.className='button';btn.textContent='Animate this image →';btn.onclick=()=>makeImageVideo(j);$('#output').append(btn);}
   }
   if(follow){if(completedAnswer)(task==='chat'?$('#chat-history').lastElementChild:$('#workspace-result'))?.scrollIntoView({block:'start'});else scrollConversation();}
@@ -658,6 +723,10 @@ async function pollRuns(){try{
   const tag=response.headers.get('ETag');
   const changed=tag?tag!==runsTag:JSON.stringify(next)!==JSON.stringify(runs);
   runsTag=tag||'';const ended=runs.some(r=>r.status==='running')&&!next.some(r=>r.status==='running');runs=next;const busy=runs.find(r=>r.status==='running'||r.status==='queued');if($('#activity-status'))$('#activity-status').textContent=busy?busy.name+' · '+(busy.phase || busy.status):'';if(busy?.phase)$('#resident').textContent=busy.phase;window.dispatchEvent(new CustomEvent('spindle:activity',{detail:!!busy}));window.dispatchEvent(new CustomEvent('spindle:run',{detail:busy?{name:busy.name,status:busy.status,phase:busy.phase,progress:busy.progress}:null}));
+  if(pendingChatRestore&&state&&page==='workbench'&&task==='chat'&&!$('#prompt')?.value){
+    const run=runs.find(item=>item.id===pendingChatRestore);
+    if(isChatRun(run))openChatRun(run);else rememberChatRun(null);
+  }
   if(changed&&page==='workbench')renderModelLoad();
   if(changed){promptDex?.update();if(page==='meeting')meetingDesk?.update();if(page==='dashboard')refreshDashboard();if(page==='workbench'&&currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}if(page==='library')renderRuns();if(page==='workflows')renderWorkflowStatus();}if(ended){await refresh(false);if(page==='workbench')renderModelLoad();}}catch(e){console.warn(e.message);}}
 function modelsPage(){
@@ -679,7 +748,7 @@ async function modelAction(b){
   try{
     await api('/api/model',{id,action});
     if(action==='start'&&compatible('chat',true).some(model=>model.id===id)){
-      if(id!==chatModel){chat=[];if(task==='chat')currentJob=null;}
+      if(id!==chatModel){chat=[];rememberChatRun(null);if(task==='chat')currentJob=null;}
       chatModel=id;
     }
     if(action==='stop'&&id===chatModel)chatModel='';
@@ -739,7 +808,7 @@ function renderRuns(){
   sorted.forEach((j,index)=>{
     let card=target.querySelector(`[data-run-id="${j.id}"]`);
     const textureActions=j.outputs.map((out,i)=>meshTextureAction(j,out,i));
-    const sig=JSON.stringify([j.input,j.steps,j.outputs,j.finalOutput,j.error,j.restoreError,j.persistenceError,textureActions]);
+    const sig=JSON.stringify([j.input,j.steps,j.outputs,j.finalOutput,j.error,j.audioFailure,j.restoreError,j.persistenceError,textureActions]);
     if(!card){card=document.createElement('article');card.className='panel run-card';card.dataset.runId=j.id;}
     if(runSignatures.get(j.id)!==sig||!card.children.length){
       const [step]=j.steps;
@@ -753,12 +822,16 @@ function renderRuns(){
       ].join('');
       const recipeSteps=j.steps.map(({attachments,...step})=>attachments?.length?{...step,attachments:attachments.map(file=>file.name)}:step);
       const inputAttachments=textAttachmentDetails(single?step.attachments:undefined);
-      const outputs=j.outputs.map((out,i)=>libraryOutput(out,textureActions[i])).join('');
-      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${prompt}${inputAttachments}${j.finalOutput?libraryOutput(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${outputs}</details>`:outputs}${j.error?recoveryHTML(j.error):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary>${recipeCopies?'<div class="actions">'+recipeCopies+'</div>':''}<pre>${esc(JSON.stringify({input:j.input,steps:recipeSteps},null,2))}</pre></details></div>`;
+      const outputs=j.outputs.map((out,i)=>libraryOutput(out,textureActions[i]+appPreviewButton(out,j.id,i))).join('');
+      card.innerHTML=`<div class="panel-head"><div><h3>${esc(j.name)}</h3><div class="small muted">${new Date(j.createdAt).toLocaleString()} · ${j.steps.length} step${j.steps.length===1?'':'s'}</div></div><div class="actions run-actions"></div></div><div class="panel-body output-area">${prompt}${inputAttachments}${j.finalOutput?libraryOutput(j.finalOutput):''}${j.film?`<details><summary>Saved segments · ${j.outputs.length}</summary>${outputs}</details>`:outputs}${j.error?recoveryHTML(j.error,j.audioFailure):''}${j.restoreError?`<p class="error">${esc(j.restoreError)}</p>`:''}${j.persistenceError?`<p class="error">${esc(j.persistenceError)}</p>`:''}<details class="section-gap"><summary>Run recipe & parameters</summary>${recipeCopies?'<div class="actions">'+recipeCopies+'</div>':''}<pre>${esc(JSON.stringify({input:j.input,steps:recipeSteps},null,2))}</pre></details></div>`;
       runSignatures.set(j.id,sig);
     }
     card.querySelector('.run-actions').innerHTML=`<span class="pill ${j.status==='completed'?'live':''}">${esc(j.status==='running'?j.phase || j.status:j.status)}${j.progress!=null?' · '+j.progress+'%':''}</span>${['queued','running'].includes(j.status)?'<button class="button danger cancel-run">Stop run</button>':''}${j.status==='completed'&&j.outputs.some(o=>o.task==='image'&&o.assets?.some(a=>a.mime.startsWith('image/')))?'<button class="button use-image">Edit / animate image →</button>':''}${j.roughCut?.segments?'<button class="button review-cut">Review rough cut →</button>':''}${j.film&&['failed','cancelled','interrupted'].includes(j.status)?'<button class="button resume-film">Resume film →</button>':''}`;
     const stop=card.querySelector('.cancel-run');if(stop)stop.onclick=()=>api('/api/cancel/'+j.id,{}).then(poll).catch(fail);
+    if(state&&isChatRun(j)){
+      const open=document.createElement('button');open.type='button';open.className='button';open.textContent='Open in Chat';
+      open.onclick=()=>openChatRun(j);card.querySelector('.run-actions').append(open);
+    }
     const cut=card.querySelector('.review-cut');if(cut)cut.onclick=()=>{page='workflows';roughCut.open(j.id);show();roughCut.open(j.id);$('#rough-cut-workflow')?.scrollIntoView({block:'start'});};
     const use=card.querySelector('.use-image');if(use)use.onclick=()=>makeImageVideo(j);
     const resume=card.querySelector('.resume-film');if(resume)resume.onclick=async()=>{resume.disabled=true;try{const next=await api('/api/studio/resume',{id:j.id});currentJob=next.id;toast('Film resumed from saved segments.');await poll();}catch(e){fail(e);}finally{resume.disabled=false;}};
@@ -780,7 +853,14 @@ function devicePage(){
   };
   ac.onchange=async()=>{const enabled=ac.checked;ac.disabled=true;try{await api('/api/device/power',{action:'ac-power',enabled,confirm:true});powerStatus.textContent='AC recovery '+(enabled?'enabled.':'disabled.');}catch(e){ac.checked=!enabled;powerStatus.textContent=e.message;}finally{ac.disabled=false;}};
   bind('#open-connection','click',()=>{page='connection';show();});
-  api('/api/readiness').then(r=>{if(!$('#readiness'))return;$('#readiness').innerHTML=Object.entries(state.tasks).map(([k,t])=>{const c=r.checks?.filter(c=>c.task===k).at(-1);return `<article class="panel verification-card"><h3>${icons[k]} ${esc(t.label)}</h3><span class="pill ${c?.status==='passed'?'live':c?.status==='failed'?'warn':''}">${c?.status==='passed'?'Verified on device':c?.status==='failed'?'Needs attention':'Not checked yet'}</span><p>${esc(c?.note || 'Connect a compatible model to validate this capability.')}</p>${c?.model?`<p>${esc(c.model)}</p>`:''}</article>`;}).join('');}).catch(fail);
+  api('/api/readiness').then(r=>{if(!$('#readiness'))return;$('#readiness').innerHTML=Object.entries(state.tasks).map(([k,t])=>{
+    const checks=r.checks?.filter(c=>c.task===k)||[],c=checks.at(-1);
+    const speechModes=k==='speech'&&c?.model?['plain','voice-reference'].flatMap(mode=>{
+      const check=checks.findLast(item=>item.model===c.model&&item.speechMode===mode);
+      return check?[`<p>${mode==='plain'?'Plain speech':'Reference voice'} · ${esc(check.status)}</p>`]:[];
+    }).join(''):'';
+    return `<article class="panel verification-card"><h3>${icons[k]} ${esc(t.label)}</h3><span class="pill ${c?.status==='passed'?'live':c?.status==='failed'?'warn':''}">${c?.status==='passed'?'Verified on device':c?.status==='failed'?'Needs attention':'Not checked yet'}</span><p>${esc(c?.note || 'Connect a compatible model to validate this capability.')}</p>${c?.model?`<p>${esc(c.model)}</p>`:''}${speechModes}</article>`;
+  }).join('');}).catch(fail);
 }
 function connectionPage(){
   document.body.classList.remove('creating');window.dispatchEvent(new Event('spindle:workspace'));closeNavigation();
@@ -827,7 +907,9 @@ async function useExample(index){
   }
   const file=example.sample?await loadSampleFile(example.sample):null;
   if(task!==targetTask||page!=='workbench')return;
-  exampleUndo={task,model:selectedModel,values:Object.fromEntries(['prompt','lyrics','documents','ref-text'].map(k=>[k,$('#'+k)?.value])),sample:sampleInput};
+  if(example.defaultVoice&&$('#input-file').files.length)throw Error('Remove your attached reference recording before trying the default voice.');
+  exampleUndo={task,model:selectedModel,values:Object.fromEntries(['prompt','lyrics','documents','ref-text','voice'].map(k=>[k,$('#'+k)?.value])),sample:sampleInput};
+  if(example.defaultVoice){sampleInput=null;$('#voice').value='';}
   if(file)sampleInput={task,file};
   if(exampleModel){
     selectedModel=exampleModel.id;$('#model').value=selectedModel;$('#ref-text').value=example.refText;
@@ -898,7 +980,11 @@ async function openPromptDex(id){
   }
   closeNavigation();promptDex.open(id);
 }
-function recoveryHTML(message){const tip=recovery(message);return `<aside class="recovery-card"><span class="intro-label">A USEFUL NEXT STEP</span><h3>${esc(tip.title)}</h3><p>${esc(tip.text)}</p><button type="button" class="text-button" data-recovery="${tip.action}">${esc(tip.label)} →</button><details><summary>Original message</summary><pre>${esc(message)}</pre></details></aside>`;}
+function recoveryHTML(message,audioFailure){const tip=recovery(message,audioFailure);return `<aside class="recovery-card"><span class="intro-label">A USEFUL NEXT STEP</span><h3>${esc(tip.title)}</h3><p>${esc(tip.text)}</p><button type="button" class="text-button" data-recovery="${tip.action}">${esc(tip.label)} →</button><details><summary>Original message</summary><pre>${esc(message)}</pre></details></aside>`;}
+function voiceSamplesHTML(){
+  const buttons=[['asr','Transcribe a synthetic voice','Transcribe this recording'],['speech','Try the default voice','Generate with the default voice'],['speech','Clone a synthetic voice','Generate with the reference voice']];
+  return `<section class="guide-note"><h3>Voice samples</h3><audio controls preload="none" src="/samples/${voiceReferenceSample.sample}" aria-label="Synthetic reference recording"></audio><p>${esc(voiceReferenceSample.refText)}</p><p>Try transcription or generate the same line with the default and reference voices. Each result is saved in Library &amp; runs.</p><div class="actions">${buttons.map(([mode,example,label])=>`<button type="button" class="button" data-voice-mode="${mode}" data-voice-example="${guides[mode].examples.findIndex(item=>item.label===example)}" ${state?'':'disabled'}>${label}</button>`).join('')}</div></section>`;
+}
 function openGuide(tabName){
   const selected=tabName || ({device:'essentials',models:'essentials',security:'privacy'})[page] ||
     (['workflows','meeting','dashboard','library','connection'].includes(page)?page:'task');
@@ -910,7 +996,7 @@ function openGuide(tabName){
     const topic=workspaceTips[selected];
     body=`<h3 class="guide-feature-title">${esc(topic.title)}</h3>${sections(topic.items)}`;
   }
-  if(selected==='task')body=`<span class="guide-category">${icons[task]} ${esc(state?.tasks?.[task]?.label || 'Chat & vision')}</span><h3 class="guide-feature-title">${esc(g.title)}</h3><p class="guide-lead">${esc(g.purpose)}</p><div class="guide-facts"><p><strong>BEST FOR</strong>${esc(g.best)}</p><p><strong>WHAT YOU GET</strong>${esc(g.output)}</p></div><h3>Make it better</h3><ol class="guide-tips">${g.tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ol><div class="guide-note"><strong>Worth knowing</strong><p>${esc(g.watch)}</p></div><h3>A useful starting point</h3><div class="guide-examples">${g.examples.map((e,i)=>`<button class="recipe" data-example="${i}" ${state?'':'disabled'}><strong>${esc(e.label)} ↗</strong><small>Prepare an example ${e.sample?'with a sample file':'prompt'}</small></button>`).join('')}</div><p class="guide-footnote">${state?'Examples prepare inputs. To generate a result, send or run the example.':'Connect your Tiiny to prepare an example.'}</p><div class="guide-next"><strong>YOUR NEXT MOVE</strong><p>${esc(g.next)}</p></div>`;
+  if(selected==='task')body=`<span class="guide-category">${icons[task]} ${esc(state?.tasks?.[task]?.label || 'Chat & vision')}</span><h3 class="guide-feature-title">${esc(g.title)}</h3><p class="guide-lead">${esc(g.purpose)}</p><div class="guide-facts"><p><strong>BEST FOR</strong>${esc(g.best)}</p><p><strong>WHAT YOU GET</strong>${esc(g.output)}</p></div>${['asr','speech'].includes(task)?voiceSamplesHTML():''}<h3>Make it better</h3><ol class="guide-tips">${g.tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ol><div class="guide-note"><strong>Worth knowing</strong><p>${esc(g.watch)}</p></div><h3>A useful starting point</h3><div class="guide-examples">${g.examples.map((e,i)=>`<button class="recipe" data-example="${i}" ${state?'':'disabled'}><strong>${esc(e.label)} ↗</strong><small>Prepare an example ${e.sample?'with a sample file':'prompt'}</small></button>`).join('')}</div><p class="guide-footnote">${state?'Examples prepare inputs. To generate a result, send or run the example.':'Connect your Tiiny to prepare an example.'}</p><div class="guide-next"><strong>YOUR NEXT MOVE</strong><p>${esc(g.next)}</p></div>`;
   if(selected==='start')body=`<h3 class="guide-feature-title">One small idea is enough.</h3><p class="guide-lead">Make one useful result before exploring all the controls.</p><ol class="guide-tips start-tips"><li><strong>Pick the task.</strong> Chat writes and explains. Images and Video create visuals. Transcribe reads audio; Speech makes it.</li><li><strong>Choose a compatible model.</strong> The workbench lists downloaded models for the task. Model switching can prepare the selected one for you.</li><li><strong>Try an example.</strong> Review the prepared prompt or sample file. Leave advanced settings at {} for the first run.</li><li><strong>Run and give it time.</strong> Preparing a model and generating media can take minutes. The status tells you which stage is happening.</li><li><strong>Keep and refine.</strong> Outputs are saved in Library & runs. Change one part of the input, compare, and save a workflow for repeatable work.</li></ol><div class="actions"><button class="button primary" data-guide="task">Show me examples ↗</button><button class="button quiet" data-show-onboarding>Show start strip</button></div><div class="guide-note"><strong>Keep the surface calm</strong><p>The start strip can be dismissed. This guide stays available from the top bar.</p></div>`;
   if(selected==='essentials')body=`<h3 class="guide-feature-title">A few terms. A lot less guessing.</h3><p class="guide-lead">Open the topic you need.</p>${sections(essentials)}`;
   if(selected==='workflows')body=`<h3 class="guide-feature-title">Connect the result, not just the idea.</h3><p class="guide-lead">Each step has an input and an output. Matching them is the key to a dependable recipe.</p>${sections(workflowTips)}<div class="guide-note"><strong>Two simple patterns</strong><p>Recording → Transcribe → Chat summary → Speech.<br>Image prompt → Images → Video with the previous image as its file input.</p></div>`;
@@ -928,6 +1014,8 @@ document.addEventListener('click',async e=>{
   }
   const copy=e.target.closest('[data-copy-text]');
   if(copy){await copyText(JSON.parse(copy.dataset.copyText),copy.dataset.copyKind);return;}
+  const preview=e.target.closest('[data-preview-app]');
+  if(preview){openAppPreview(preview);return;}
   if(e.target.closest('[data-open-prompt-dex]')){void openPromptDex();return;}
   const texture=e.target.closest('[data-texture-run]');
   if(texture){
@@ -950,6 +1038,14 @@ document.addEventListener('click',async e=>{
   const sound=e.target.closest('[data-soundtrack]');if(sound){workshops.adoptVideo(sound.dataset.soundtrack);page='workflows';show();$('#soundtrack-workflow')?.scrollIntoView({block:'start',behavior:'smooth'});return;}
   const guide=e.target.closest('[data-guide]');if(guide){e.preventDefault();openGuide(guide.dataset.guide);return;}
   if(e.target.closest('[data-close-guide]')){$('#guide-dialog').close();return;}
+  const voiceExample=e.target.closest('[data-voice-example]');
+  if(voiceExample){
+    const mode=voiceExample.dataset.voiceMode;
+    if(task!==mode){task=mode;currentJob=null;sampleInput=null;exampleUndo=null;page='workbench';show();}
+    try{await useExample(Number(voiceExample.dataset.voiceExample));}
+    catch(error){$('#guide-dialog').close();fail(error);}
+    return;
+  }
   const example=e.target.closest('[data-example]');if(example){e.preventDefault();try{await useExample(Number(example.dataset.example));}catch(err){fail(err);}return;}
   if(e.target.closest('[data-show-onboarding]')){localStorage.removeItem('spindle-started');if($('#guide-dialog').open)$('#guide-dialog').close();if(page!=='workbench'){page='workbench';show();}$('#onboarding')?.remove();$('.workspace-toolbar')?.insertAdjacentHTML('afterend',onboardingHTML());return;}
   if(e.target.closest('[data-dismiss-onboarding]')){localStorage.setItem('spindle-started','yes');$('#onboarding')?.remove();return;}
@@ -1008,4 +1104,6 @@ const requestedMuseum=new URL(location.href).searchParams.get('museum');
 if(/^[a-f0-9-]{36}\.html$/.test(requestedMuseum || ''))location.replace('/api/museum/preview/'+requestedMuseum);
 else{
   connectionInfo=await api('/api/connection');if(connectionInfo.keyPresent)await refresh();else{$('#connection').textContent='Connect your Tiiny';$('#resident').textContent='Endpoint and key are all you need.';page='connection';show();}await poll();async function pollAgain(){await poll();setTimeout(pollAgain,runs.some(r=>['queued','running'].includes(r.status))?600:2500);}setTimeout(pollAgain,2500);
+  window.addEventListener('pageshow',()=>void poll());
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
 }

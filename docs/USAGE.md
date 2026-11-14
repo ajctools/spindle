@@ -86,6 +86,8 @@ In **Speech**, **Clone a synthetic voice** prepares a playable reference recordi
 
 **Compact composer.** Send sits directly beneath the prompt, with the effective allowance and web-search state beside it. Replies appear above the composer. New chat, PromptDex, and Tips & examples are in the workspace header. Use **Image**, **Text files**, or **Attach from Vault** to attach material. Open **Chat options** for response length, search, thinking, advanced JSON, model switching, and workflow tools.
 
+**Return to a chat run.** Once the helper accepts Send, it keeps working while the phone is away or the page closes. On the same browser, Chat reopens the last submitted run and any linked turns. Use **Library & runs → Open in Chat** to return to an older chat run or open it from another browser connected to the same helper. The browser stores the run ID. Prompts, replies, and saved text attachments come from the helper. **New chat** clears the browser’s last-run selection. A helper restart marks in-progress runs interrupted.
+
 **Text attachments.** Pasting more than 4,000 characters into Chat creates a removable text attachment. Use **Text files** to upload UTF-8 text such as TXT, Markdown, CSV, JSON, and source code. You can send up to eight text attachments totaling 256 KiB, subject to the selected model’s context capacity. Expand an attachment in Chat or **Library & runs** to read or download it. Tiiny receives the text as part of the conversation. With text attached, search is paused for that message unless you enter an explicit query in **Chat options**.
 
 **Create with defaults.** Each media workspace starts with its prompt or required file and a Create action. A downloaded compatible model is chosen automatically, preferring a loaded model. Optional voice, lyrics, reference images, preview settings, and advanced parameters stay inside that workspace’s collapsed options. Video keeps its short-preview default. Transcription, document reading, and 3D expose their required file directly; ranking exposes candidate documents. Results and playback appear above the composer.
@@ -108,13 +110,18 @@ During a chat run, the status strip shows elapsed time, context use, output spee
 
 **Default chat model.** Spindle uses Qwen3.6 Turbo as the default when a matching chat model is downloaded. Choose a different default or turn off preloading in **Chat options**. Chat uses a compatible model already loaded on Tiiny when you open the app. With model switching enabled, a successful chat turn keeps its model loaded and your chat selection carries across New chat and workspace changes. Workflows restore their starting models when switching is enabled. To manage loaded models manually, open **Device → Models**.
 
+**App preview.** Ask for a complete HTML document with its CSS and JavaScript included. Choose **Open app preview** below a completed reply, or find an earlier reply in **Library & runs**. The app opens beside Chat on a wide screen and fills the screen on smaller devices. The preview uses an isolated frame and blocks external scripts and styles, so use inline code and embedded assets.
+
 **Search the web when useful** is on by default, and its on/off choice and provider are remembered across reloads in this browser. The notice beside Send stays visible while Chat options is collapsed. Turn it off in Chat options for local-only inference. When the query field is blank, Tiiny reads the current prompt and decides whether to generate a short public search query. The provider receives only that query. An explicit query skips that decision. Use an explicit, short query to keep sensitive material out of searches. Conversation history, image attachments, and the Tiiny key are not sent to the search provider. Workflow steps search using their configured query or eligible step prompt. Saved workflows keep the search choice and query. The Brave key stays in helper memory.
+
+For automatic web search, Tiiny checks whether the excerpts support the question. Spindle can try one alternate query and read excerpts from up to two public HTTPS results when coverage is incomplete. **Web sources** lists the evidence used and the queries tried. Chat flags partial or missing evidence. Enter a query to run that search directly.
 
 - **DuckDuckGo:** keyless, best-effort HTML search over HTTPS. It may return no results, rate-limit requests, change its markup, or require a browser verification. Spindle respects browser verification and stops the search.
 - **Brave Search:** configure a separate Brave Search API key in the chat controls ([provider documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)). It is held in the local helper’s memory until **Forget search key** or restart, shared only within this single-user helper. No disk or browser-storage persistence. API quotas or charges depend on your Brave account.
 - Each answer can use up to five snippets. Sources display titles, links, snippets, query, provider, and retrieval time. For weather queries, Spindle can look up up to two U.S. National Weather Service forecasts. The forecast request sends only the city and state, ZIP code, or public coordinates from a search result. It carries no keys, full prompt, or chat history. The source card shows the issue time and forecast periods. Other results supply snippets. Model citations such as `[1]` can be wrong; verify the corresponding source.
 - Search requests use fixed HTTPS destinations, no Tiiny credentials, no redirects, bounded response sizes, and timeouts. If search fails or the query is too long, standalone Chat continues on Tiiny and labels the reply with the reason it has no web sources. Search-enabled workflow steps stop on search errors.
 - Search queries and snippets are saved locally with the run. Internet access is required only when searching. Inference continues to use your configured Tiiny endpoint and its HTTP/TLS limitations.
+- For general U.S. and world headline requests, Chat can read BBC News and CBS News feeds when the query field is blank. Spindle filters by the requested publication window and shows dated article links. Coverage is limited to the articles in those feeds. Feed requests carry no prompt or API key.
 
 ## Guidance that stays close to the task
 
@@ -123,6 +130,8 @@ Open **Field guide** in the top bar for help with the current workspace. It cove
 ![Field guide opened from Meeting Desk with the current workspace selected](images/field-guide.jpg)
 
 Example prompts and synthetic sample files prepare inputs without starting inference. Undo restores the previous prompt or sample. Contextual recovery cards explain useful next steps and keep the original technical error available in a disclosure. Workflow preflight checks catch missing or mismatched file handoffs before running.
+
+**Voice samples** in Speech and Transcribe let you play a synthetic recording, read its transcript, and prepare transcription or a default-versus-reference voice comparison. In Speech options, **Test plain speech** uses the default voice. **Test capability** uses a synthetic reference on models that advertise voice cloning. Device readiness shows the latest outcomes for both modes on the last speech model tested.
 
 ## Models and workflows
 
@@ -202,6 +211,8 @@ Publish that extracted source folder or an archive made from it. Do not upload t
 
 ## Tests
 
+Run `npm run regression` for the automated tests and a clean release scan. Run `npm run regression -- --browser` to include synthetic browser checks, or use `--browser-only` for a quick UI pass. See [Validation](VALIDATION.md#running-the-regression-suite) for prerequisites and results.
+
 ```sh
 node --test test/*.test.mjs
 ```
@@ -212,7 +223,9 @@ Physical-device checks, when run, are recorded separately in the local readiness
 
 ## Boundaries
 
-Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. The Transcribe workspace accepts browser-decodable recordings up to 15 minutes per file. Meeting Desk accepts up to 30 minutes and shows progress as each minute-long section finishes. While recording, optional live preview sends approximately 10-second clips to an already loaded ASR model. Preview text stays in the current browser view, and Tiiny can skip clips when busy. Use **Transcribe** to save the full transcript. The museum can display a bounded subset of embedded GLB geometry.
+Workflows are sequential; branching, tool execution, parallel branches, and a freeform node canvas are not implemented. The Transcribe workspace accepts browser-decodable recordings up to 15 minutes per file. Meeting Desk accepts up to 30 minutes and imports up to 64 MiB. You can play or download the draft before submitting it. Leaving Meeting Desk stops capture and keeps the draft for the current page session. Use **Transcribe** to save the audio and process it in minute-long sections. Near-silent sections are skipped, with their original time offsets preserved.
+
+Optional **Live transcription preview** sends approximately 15-second clips to an already loaded speech recognition model. The preview backlog defaults to two waiting clips and can be turned off or increased to four. If Tiiny falls behind, Spindle drops older preview clips and reports misses. Near-silent clips are skipped and obvious decoding loops are omitted from the preview. Background sounds above the quiet threshold can still lead to false transcripts. The backlog and preview are temporary. Use the saved recording to review the full audio. The museum can display a bounded subset of embedded GLB geometry.
 
 Runs and outputs survive server restarts. Active/queued runs become interrupted and require explicit rerunning. A terminated server cannot guarantee model restoration. No OS startup service or scheduled job is installed.
 

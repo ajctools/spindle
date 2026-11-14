@@ -1,5 +1,24 @@
 # Validation
 
+## Running the regression suite
+
+```sh
+npm run regression
+npm run regression -- --browser
+npm run regression -- --browser-only
+```
+
+The first command runs the isolated Node.js tests and builds a clean, allowlisted release in a temporary directory. The second adds a headless browser smoke test. The third runs only the browser checks. You can also use `node scripts/regression.mjs` with the same flags if you prefer to run Node directly.
+
+Use Node.js 22 or newer. Install FFmpeg and FFprobe to exercise the real media-processing tests. Those tests report skips when the tools are unavailable. For browser checks, install Chrome, Edge, or Chromium. Set `SPINDLE_BROWSER` to the executable path if the runner cannot find it. The browser checks start a synthetic preview with a fresh profile and temporary data. They leave the normal helper and its history alone.
+
+## November 2026 regression results
+
+- **Automated checks.** All 124 tests in the clean source release passed on Linux with Node.js 22. The Windows development checkout passed 133 tests, including nine development-only tests outside the release. Neither run reported skips. A repeated Windows run exposed a timing-dependent assertion during the final history write. The assertion now waits for the queue to settle, and the rerun passed.
+- **Browser.** Headless Edge checked all 11 creation modes at four viewport sizes from 320 to 1440 pixels. The smoke test also exercised navigation, dialogs, dashboard cost filters, and Meeting Desk draft import, playback metadata, and retention after leaving the workspace.
+- **Live inference.** Thirteen synthetic-input cases passed through the Linux helper and a connected Tiiny. They covered all 11 creation capabilities, a chat with dated publisher sources, and a meeting summary. For transcription, the helper skipped a silent section and recognized the sample speech on either side. The media checks confirmed decoding or, for 3D, the GLB signature and length. The initial loaded models were restored. Direct provider checks returned dated headlines and a National Weather Service forecast.
+- **Coverage limits.** Physical mobile browser behavior, real microphone and shared-tab capture, and subjective media prompt adherence still need hands-on checks. Model behavior and runtime options can vary by firmware and model. The public repository contains synthetic fixtures and aggregate results only.
+
 The 0.8.0 checks cover automatic Chat search with object-form queries, query-only requests to the provider, visible search failures, and chat speed and cache reporting. A Tiiny chat run also retrieved live DuckDuckGo sources using automatic query planning. The mock 3D runtime verifies the saved shape, material, and textured GLB handoffs through the app’s normal API.
 
 The 0.7.1 source bundle was tested separately from the development checkout. Browser QA in Microsoft Edge covered all 11 creation modes at five desktop, tablet, and phone sizes, the main navigation and nested workflow panels, Meeting Desk, PromptDex, global search, the field guide, and device settings. It verified long-paste conversion, multiple text uploads, the clipboard fallback, exact text download from Library while disconnected, and numeric dashboard sorting. Mock-device integration tests verify that attached text reaches Tiiny, web search uses only a separate query when supplied, and concurrent requests for different weeks return the correct ledger. Physical-device inference and live search providers were outside this validation.
@@ -45,6 +64,8 @@ Chat/search coverage includes split UTF-8 and CRLF stream frames, streamed reaso
 Compact-chat coverage includes an Ample allowance up to 65,536 tokens, adjustment for smaller reported contexts and a 32,768-token fallback when context size is unknown, explicit runtime defaults, persisted response/search/provider preferences, blocked-storage fallback, and exclusion of prompts, queries, and credentials from preference storage. Browser checks verified Send adjacent to the prompt, collapsed options, successful submission while collapsed, and search/response choices surviving reloads.
 
 Global search tests cover title ranking, older chat replies, transcript timestamps, workflow and prompt text, and exclusion of attachment bytes, private reasoning, and search settings. Browser checks at 320–1440 pixels covered keyboard navigation, saved results, draft preservation when closing search, and query exclusion from network requests and browser storage. Idle history polling returns an authenticated empty response when the history is unchanged. Meeting Desk tests cover recording preparation, authenticated media ranges for exact seeks, saved transcripts, anonymous voice labels scoped to each audio section, and summaries sent to a local chat model with web search off. Voice labeling depends on the transcription model reporting speaker segments.
+
+Meeting Desk regression checks cover the 30-minute normalized WAV boundary, preserved section offsets, quiet sections skipped before inference, empty responses, access checks for preview requests, one active preview request, oversized response rejection, and suppression of repetitive preview output. Windows Edge browser QA checked layouts at 320, 390, 768, and 1440 pixels. At 390 pixels, a fake microphone, synthetic shared audio, and a mock device exercised the browser’s audio recorder and decoder, input meter, backlog, playback, and release of capture tracks when leaving the workspace. The browser’s native tab picker and physical-device accuracy and throughput still need direct validation. The music adapter also checks that a dropped generation response is classified separately from runtime setup and does not automatically resubmit generation.
 
 The chat-first creation interface was checked in headless Microsoft Edge using the synthetic preview server. All 11 modes were checked at six viewport sizes from 320 × 568 to 1440 × 900, including a reduced 390 × 430 viewport: no horizontal overflow, visible primary actions, and options initially collapsed. Mock browser runs verified streamed and completed replies, follow-up context, quick image attachments, persisted search/response settings without prompt/query storage, video preview defaults, audio controls, and image-to-video workflow handoff after navigating away and back. These browser checks do not replace physical-phone testing of the operating system keyboard or validation on every mobile browser.
 

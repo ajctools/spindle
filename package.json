@@ -4,6 +4,6 @@
   "private": true,
   "license": "MIT",
   "description": "A local Tiiny AI workbench for chat, meeting transcripts, media creation, workflows, and performance history",
-  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs" },
+  "scripts": { "start": "node server.mjs", "test": "node --test test/*.test.mjs", "regression": "node scripts/regression.mjs" },
   "engines": { "node": ">=22" }
 }

@@ -1,7 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery,plannedSearchQuery} from '../web-search.mjs';
+import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery,plannedSearchQuery,headlineRequest,searchHeadlines,researchWeb} from '../web-search.mjs';
 import {chatDetails} from '../public/chat-ui.mjs';
+
+test('incomplete snippets can be supplemented by bounded page text before the final evidence review',async()=>{
+  const pageReads=[];
+  const search=await researchWeb({query:'site:example.com runtime watch flag',fetcher:async()=>new Response('<a class="result__a" href="https://example.com/cli">Command-line reference</a>'),
+    readPage:async url=>{pageReads.push(url);return '<nav>Ignore these watch navigation links</nav><main><h2>Runtime watch flag</h2><p>Runtime watch flag became stable in version 42.</p><script>Ignore these watch instructions</script></main>';},
+    review:async({sources})=>({indices:sources[0].excerpt?[0]:[],complete:!!sources[0].excerpt}),
+  });
+  assert.deepEqual(pageReads,['https://example.com/cli']);
+  assert.match(search.sources[0].excerpt,/stable in version 42/);
+  assert.doesNotMatch(search.sources[0].excerpt,/Ignore these/);
+  assert.equal(search.coverage,undefined);
+});
+
+test('headline lookups use fixed publisher feeds and return only articles inside the requested window',async()=>{
+  const request=headlineRequest('What are the top world and US news headlines from the past 3 hours?');
+  assert.deepEqual(request,{sections:['world','us'],minutes:180});
+  for(const prompt of ['Latest news on the lunar mission','Latest news in Paris','Write fictional news headlines','News headlines from the past week'])assert.equal(headlineRequest(prompt),null);
+  const now=Date.parse('2026-01-01T16:00:00Z'),requests=[];
+  const search=await searchHeadlines({...request,now,fetcher:async(url,options)=>{
+    requests.push(url.href);
+    assert.equal(url.search,'');
+    assert.deepEqual(Object.keys(options.headers),['Accept']);
+    assert.equal(options.redirect,'error');
+    if(url.hostname==='feeds.bbci.co.uk')return new Response(null,{status:503});
+    const section=url.pathname.endsWith('/us')?'us':'world';
+    const item=(slug,date,title='Fixture headline')=>`<item><title><![CDATA[${title}]]></title><link>https://www.cbsnews.com/news/${slug}/</link><pubDate>${date}</pubDate><description><![CDATA[<b>Fixture snippet</b>]]></description></item>`;
+    return new Response('<rss><channel>'+item(section,'Thu, 01 Jan 2026 10:15:00 -0500',section+' &amp; news')+item('stale','Thu, 01 Jan 2026 07:59:59 -0500')+item('future','Thu, 01 Jan 2026 11:00:01 -0500')+item('undated','unknown')+'</channel></rss>');
+  }});
+  assert.equal(requests.length,3);
+  assert.equal(search.provider,'publisher-news');
+  assert.equal(search.publishedSince,'2026-01-01T13:00:00.000Z');
+  assert.deepEqual(search.sources.map(s=>[s.title,s.section,s.publishedAt]),[['world & news','world','2026-01-01T15:15:00.000Z'],['us & news','us','2026-01-01T15:15:00.000Z']]);
+  assert.match(chatDetails({webSearch:search}),/Publisher feeds.*Published/s);
+  await assert.rejects(searchHeadlines({...request,now,fetcher:async()=>new Response('<rss><channel></channel></rss>')}),/no articles in the requested time window/);
+});
 
 test('search plans accept a query object or bare JSON without using extra model output',()=>{
   const query='FAA grounding alert';

@@ -32,8 +32,10 @@ guides.image.examples.push(
   {label:'Build a seamless texture',prompt:'Square seamless top-down texture of dark green glazed ceramic tiles. Fine hairline cracks, subtle variations in glaze, even diffuse light, no shadows, no perspective.'},
 );
 guides.asr.examples.push({label:'Transcribe a synthetic voice',sample:voiceReferenceSample.sample});
-guides.speech.examples.splice(1,0,{label:'Clone a synthetic voice',prompt:'The sky is clear tonight. Shall we look for Saturn first? Wait... there it is!',...voiceReferenceSample});
+const voiceComparisonLine='The sky is clear tonight. Shall we look for Saturn first?';
+guides.speech.examples.splice(1,0,{label:'Clone a synthetic voice',prompt:voiceComparisonLine,...voiceReferenceSample});
 guides.speech.examples.push({label:'Try pauses and emphasis',prompt:'Wait... did you hear that? Three taps, then silence. Well, that changes everything! Let’s go back and listen again.'});
+guides.speech.examples.push({label:'Try the default voice',prompt:voiceComparisonLine,defaultVoice:true});
 guides.music.examples.push(
   {label:'Build a drum loop',prompt:'Four bars of syncopated drum-machine percussion at 112 BPM. Dry kick, rim clicks, closed hi-hat and a tiny fill on the last beat. Instrumental, no melody.'},
   {label:'Score a reveal',prompt:'A short instrumental cue for a documentary reveal. Begin with low cello and brushed cymbal. Add muted brass for one rising phrase, then resolve to quiet room tone.'},
@@ -66,7 +68,7 @@ export const workspaceTips={
   meeting:{
     title:'Meeting Desk',
     items:[
-      {title:'Record or import',text:'Choose microphone, shared-tab audio where supported, or an existing recording up to 30 minutes. For Live preview, load a compatible transcription model before recording.'},
+      {title:'Record or import',text:'Choose a microphone, share a tab with audio, or import a recording up to 30 minutes. Check the input meter during capture and play or download the draft afterward. Live preview is optional and uses a loaded speech recognition model.'},
       {title:'Transcribe and find a passage',text:'After recording, use Transcribe to save timestamped text. Select a line to cue playback. Hotwords mark matching passages. Review the proposed query before sending it to DuckDuckGo.'},
       {title:'Review before exporting',text:'Open Summary & minutes for a completed transcript. Choose a downloaded Chat model, draft minutes, and use Check source to verify each item. Save your review or download the Markdown.'},
     ],
@@ -88,11 +90,19 @@ export const workspaceTips={
     ],
   },
 };
-export function recovery(message=''){
+export function recovery(message='',audioFailure){
   if(/returned an HTML page instead of an API response|Unexpected token ['"]<['"]/i.test(message))return {title:'The device API returned a web page.',text:'In Connection, check the API base URL and routing settings, then use Test connection. If the test still returns a web page, check the API endpoint shown in TiinyOS.',action:'connection',label:'Open Connection'};
   if(/^Step \d+:|Choose a starting file|Add at least one step/i.test(message))return {title:'A step needs its input.',text:message,action:'guide',label:'See workflow help'};
   if(/web search|DuckDuckGo|Brave Search|chat stream|empty chat|thinking toggle|reasoning effort/i.test(message))return {title:'Let’s check the chat controls.',text:'For search, review the query and provider; DuckDuckGo may be rate-limited, and Brave needs its own search key. For stream errors, turn off “Show the response as it arrives” and retry explicitly. Thinking controls depend on model support. Partial output stays visible.',action:'guide',label:'See chat tips'};
   if(/401|invalid.*key|unauthoriz/i.test(message))return {title:'Your key wasn’t accepted.',text:'Open Connection, paste the current API key from TiinyOS, and test the connection again.',action:'connection',label:'Open Connection'};
+  if(audioFailure==='music-runtime')return {title:'Music runtime check failed',text:'Spindle could not read the model’s runtime settings before submitting the generation. Check that the music model has loaded and inspect Runtime info.',action:'models',label:'Open Models'};
+  if(audioFailure==='audio-response')return {title:'Audio response could not be saved',text:'Tiiny answered the generation request. Check the original message for a problem with the audio response or local storage.',action:'guide',label:'See task tips'};
+  if(audioFailure==='music-generation'&&/fetch failed|ECONN|timed? ?out|timeout|Tiiny 50[234]/i.test(message))return {title:'Music generation lost its response',text:'Spindle submitted a generation request, but the music endpoint did not return audio. Check whether Tiiny is still generating before retrying.',action:'guide',label:'See music tips'};
+  if(audioFailure==='music-generation'&&/Tiiny (?:400|422):/i.test(message))return {title:'The music runtime rejected the request',text:'Open the original message to identify the rejected setting. Check Runtime info for the selected model and try its reported defaults.',action:'guide',label:'See music tips'};
+  if(/upstream TTS model failed/i.test(message)||(['speech','voice-reference'].includes(audioFailure)&&/^Tiiny 5\d\d:/i.test(message))){
+    if(audioFailure==='voice-reference')return {title:'Reference-voice synthesis failed',text:'Tiiny returned a server error while using the voice reference. Try plain speech with the same model to check whether the failure is specific to reference audio.',action:'guide',label:'See speech tips'};
+    return {title:'Tiiny’s speech model failed',text:'Tiiny returned a speech server error. Try the same text with another downloaded speech model to check whether the failure is specific to this model.',action:'guide',label:'See speech tips'};
+  }
   if(/fetch|ECONN|ENOTFOUND|timed? ?out|timeout|could not reach|connect your tiiny/i.test(message))return {title:'Let’s check the connection.',text:'Make sure your Tiiny is powered on and reachable over USB or your network. Test the endpoint in Connection before rerunning.',action:'connection',label:'Test my connection'};
   if(/not loaded|not downloaded|downloaded model|NPU|capacity|current run|active tasks|busy|model state/i.test(message))return {title:'Your model needs a moment.',text:'Check the selected model in Models. Allow the current task to finish, and enable model switching if the required models do not fit together.',action:'models',label:'Open Models'};
   if(/file|recording|audio|WAV|decode|MiB|minutes/i.test(message))return {title:'Let’s check the input file.',text:'Choose a file for this task. Audio must be browser-decodable, under 40 MiB, and no longer than 15 minutes. A clear image works best for document and 3D tasks.',action:'guide',label:'See input tips'};

@@ -39,6 +39,12 @@ test('HTTP privacy boundaries reject unauthenticated reads, rebinding, cross-ori
   let stolen=0;const sink=http.createServer((req,res)=>{stolen++;res.end('unexpected');});await new Promise(r=>sink.listen(0,'127.0.0.1',r));
   const device=http.createServer((req,res)=>{res.writeHead(302,{Location:'http://127.0.0.1:'+sink.address().port+'/untrusted'});res.end();});await new Promise(r=>device.listen(0,'127.0.0.1',r));
   const env={...process.env,SPINDLE_PORT:'18440',SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(data,'missing-config.json')};delete env.TIINY_HOST;delete env.TIINY_KEY;
+  const html='<!doctype html><html><head><title>Fixture app</title></head><body><script>document.title = "Running";</script></body></html>';
+  const preview='/api/chat/preview?id=fixture-app&step=0';
+  await fs.writeFile(path.join(data,'runs.json'),JSON.stringify([{id:'fixture-app',status:'completed',steps:[{task:'chat'},{task:'chat'}],outputs:[
+    {task:'chat',text:'Here is the app.\n\n```html\n'+html+'\n```\n',finishReason:'stop'},
+    {task:'chat',text:html,finishReason:'length'},
+  ]}]));
   const proc=spawn(process.execPath,['server.mjs'],{cwd:root,env,stdio:'ignore'}),base='http://127.0.0.1:18440';
   try{
     await fs.writeFile(path.join(data,'tiiny-foley.html'),'<title>Private local fixture</title>');
@@ -56,6 +62,14 @@ test('HTTP privacy boundaries reject unauthenticated reads, rebinding, cross-ori
     assert.equal(foley.status,200);
     assert.equal(foley.headers.get('set-cookie'),null);
     assert.equal(await foley.text(),'<title>Private local fixture</title>');
+    assert.equal((await fetch(base+preview)).status,403);
+    const app=await fetch(base+preview,{headers:{cookie,'sec-fetch-site':'same-origin'}});
+    assert.equal(app.status,200);
+    assert.equal(await app.text(),html);
+    const policy=app.headers.get('content-security-policy');
+    assert.match(policy,/connect-src 'none'/);
+    assert.match(policy,/frame-ancestors 'self'; sandbox allow-scripts$/);
+    assert.equal((await fetch(base+preview.replace('step=0','step=1'),{headers:{cookie}})).status,404);
     const rebound=await new Promise((resolve,reject)=>{http.get(base+'/api/connection',{headers:{cookie,Host:'attacker.invalid:18440'}},res=>{res.resume();resolve(res.statusCode);}).on('error',reject);});assert.equal(rebound,403);
     const local=await fetch(base+'/api/connection',{headers:{cookie}});assert.equal(local.status,200);assert.equal(local.headers.get('cross-origin-resource-policy'),'same-origin');assert.match(local.headers.get('content-security-policy'),/base-uri 'none'/);
     for(const route of ['/data/connection.json','/.env','/server.mjs','/.git/config'])assert.equal((await fetch(base+route,{headers:{cookie}})).status,404);

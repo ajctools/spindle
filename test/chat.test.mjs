@@ -1,9 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatMessage,chatSampleSettings,chatSettings,readChatResponse,requestChatResponse} from '../chat.mjs';
-import {chatDetails,chatMarkdown,chatRunStats,withResponseLimit} from '../public/chat-ui.mjs';
+import {chatDetails,chatMarkdown,chatRunStats,restoreChat,withResponseLimit} from '../public/chat-ui.mjs';
 import {loadChatOptions,saveChatOptions,ampleResponseTokens} from '../public/chat-settings.mjs';
 import {createMetric} from '../metrics.mjs';
+
+test('chat recovery uses linked saved turns and leaves a running reply to the live renderer',()=>{
+  const step={task:'chat',model:'test/chat',promptMode:'literal'};
+  const attachments=[{name:'example.txt',text:'A reference.'}];
+  const first={id:'first',status:'completed',keepChatModel:true,steps:[{...step,prompt:'First prompt',attachments}],outputs:[{task:'chat',text:'First reply',webSearchWarning:'No sources'}]};
+  const second={id:'second',status:'running',keepChatModel:true,previousChatRunId:'first',steps:[{...step,prompt:'Follow-up'}],outputs:[],partial:{text:'Still generating'}};
+  const unrelated={...first,id:'unrelated'};
+  const restored=restoreChat(second,[unrelated,second,first]);
+  assert.deepEqual(restored.map(item=>[item.role,item.content]),[['user','First prompt'],['assistant','First reply'],['user','Follow-up']]);
+  assert.deepEqual(restored[0].attachments,attachments);
+  assert.equal(restored[1].runId,'first');
+  assert.equal(restored[1].webSearchWarning,'No sources');
+  assert.equal(restoreChat({...second,status:'completed',outputs:[{task:'chat',text:'Second reply'}]},[first]).at(-1).content,'Second reply');
+});
 
 test('capability checks leave room for a final answer when reasoning cannot be disabled',()=>{
   assert.deepEqual(chatSampleSettings({thinking:{toggleable:true}}),{max_tokens:8192,chat_template_kwargs:{enable_thinking:false}});

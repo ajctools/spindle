@@ -1,12 +1,13 @@
 import {transcriptionFile} from './audio.js';
-
-const maxSeconds=1800;
-const previewSeconds=10;
 import {meetingLines,meetingClock as clock} from './meeting-transcript.mjs';
 import {chatMarkdown} from './chat-ui.mjs';
 import {packetKinds,packetMarkdown,packetRows} from './meeting-packet.mjs';
 import {artifactName,downloadArtifact} from './artifact-download.mjs';
 export {meetingLines};
+
+const maxSeconds=1800;
+const previewSeconds=15;
+const maxInputBytes=64*1024*1024;
 
 export function meetingMatches(lines,terms){
   const patterns=terms.split(',').map(term=>term.trim()).filter(Boolean).slice(0,20)
@@ -27,7 +28,8 @@ export function meetingQuery(text,matches){
 export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred,isLoaded,onModelLoaded,onQueued,onRunChanged,copyButton=()=>''}){
   let root=null,recorder=null,source=null,timer=null,starting=false,busy=false,recording=null;
   let title='',model='',terms='research',selected='',revision='',status='',providerBusy=false,visible=false;
-  let previewEnabled=false,preview=null,previewPending=false,loadingModel=false,requestingSummary=false;
+  let previewEnabled=false,preview=null,previewPending=false,previewBuffer=2,mode='mic',loadingModel=false,requestingSummary=false;
+  let draftUrl='',captureStarted=0,meter=null,elapsedTimer=null;
   let cancellingSummary='';
   const summaryErrors=new Map();
   const packetDrafts=new Map();
@@ -36,7 +38,42 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
   const research=new Map();
   const el=selector=>root?.querySelector(selector);
   const tell=value=>{status=value;if(el('#meeting-status'))el('#meeting-status').textContent=value;};
-  const stop=()=>{if(recorder?.state==='recording')recorder.stop();};
+  const stop=()=>{
+    if(recorder?.state!=='recording')return;
+    stopPreview('Preview ended. Transcribe the recording for a saved transcript.');
+    recorder.stop();
+    source?.getTracks().forEach(track=>track.stop());
+    syncControls();
+  };
+  function setRecording(file){
+    if(draftUrl)URL.revokeObjectURL(draftUrl);
+    recording=file;
+    draftUrl=file?URL.createObjectURL(file):'';
+  }
+  function stopMeter(){
+    if(!meter)return;
+    clearInterval(meter.timer);
+    void meter.context.close().catch(()=>{});
+    meter=null;
+  }
+  function startMeter(stream){
+    const context=new AudioContext();
+    meter={context};
+    try{
+      const analyser=context.createAnalyser();
+      analyser.fftSize=512;
+      context.createMediaStreamSource(stream).connect(analyser);
+      const samples=new Float32Array(analyser.fftSize);
+      meter.timer=setInterval(()=>{
+        if(!visible)return;
+        analyser.getFloatTimeDomainData(samples);
+        let peak=0;
+        for(const sample of samples)peak=Math.max(peak,Math.abs(sample));
+        el('#meeting-input-level').value=Math.min(1,peak);
+      },250);
+      void context.resume().catch(()=>{});
+    }catch{stopMeter();}
+  }
   function syncControls(){
     if(!visible||!root?.isConnected)return;
     el('#meeting-record').disabled=starting||!!recorder||busy||loadingModel;
@@ -45,51 +82,107 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
     el('#meeting-file').disabled=starting||busy||!!recorder;
     el('#meeting-source').disabled=starting||!!recorder;
     el('#meeting-preview-toggle').disabled=starting||!!recorder||busy;
+    el('#meeting-preview-settings').hidden=!previewEnabled;
+    el('#meeting-preview-buffer').disabled=starting||!!recorder||busy;
     el('#meeting-model').disabled=starting||!!recorder||busy||loadingModel;
     el('#meeting-load-model').hidden=!previewEnabled||!model||isLoaded(model);
     el('#meeting-load-model').disabled=starting||!!recorder||busy||loadingModel;
-    el('#meeting-input-name').textContent=recording?.name||'Choose an audio file or start recording.';
+    el('#meeting-source-help').textContent=mode==='tab'?'Choose a browser tab in the share picker and enable tab audio.':'Choose the microphone input in your browser or system settings.';
+    el('#meeting-input-name').textContent=recording?.name||'';
+    el('#meeting-draft').hidden=!recording||!!recorder;
+    const player=el('#meeting-draft-player');
+    const download=el('#meeting-download');
+    if(draftUrl){download.href=draftUrl;download.download=recording.name;}else download.removeAttribute('href');
+    if(!recorder&&draftUrl&&player.getAttribute('src')!==draftUrl)player.src=draftUrl;
+    if((!draftUrl||recorder)&&player.hasAttribute('src')){player.pause();player.removeAttribute('src');player.load();}
+    el('#meeting-capture-state').hidden=!recorder;
   }
   function renderPreview(){
     if(!visible||!root?.isConnected)return;
     el('#meeting-preview').hidden=!preview;
     if(!preview)return;
-    el('#meeting-preview-status').textContent=preview.status;
+    el('#meeting-preview-status').textContent=[preview.status,preview.dropped?`${preview.dropped} preview clips missed`:''].filter(Boolean).join(' · ');
+  }
+  function renderPreviewLines(){
+    if(!visible||!preview||!root?.isConnected)return;
+    const target=el('#meeting-preview-lines');
+    const follow=target.scrollHeight-target.scrollTop-target.clientHeight<24;
     const hits=new Map(meetingMatches(preview.lines,terms).map(match=>[match.index,match.matches]));
-    el('#meeting-preview-lines').innerHTML=preview.lines.map((line,index)=>
+    target.innerHTML=preview.lines.map((line,index)=>
       `<article><small>Around ${clock(line.at)}</small>${hits.has(index)?' <strong class="pill live">'+esc(hits.get(index).join(', '))+'</strong>':''}<p>${esc(line.text)}</p></article>`).join('');
+    if(follow)target.scrollTop=target.scrollHeight;
   }
   function stopPreview(message){
-    if(!preview)return;
+    if(!preview?.running)return;
+    preview.running=false;
     clearTimeout(preview.timer);
+    clearTimeout(preview.retry);
+    preview.request?.abort();
+    preview.queue.length=0;
     if(preview.recorder?.state==='recording')preview.recorder.stop();
     preview.recorder=null;
-    if(preview.running){preview.running=false;preview.status=message;renderPreview();}
+    preview.status=message;renderPreview();
+  }
+  async function drainPreview(session){
+    if(!session?.running||previewPending||!session.queue.length||session.retry)return;
+    const item=session.queue.shift();
+    previewPending=true;
+    try{
+      if(performance.now()-item.captured>60_000){session.dropped++;return;}
+      const file=item.file??await transcriptionFile(item.blob,20,{skipQuiet:true});
+      if(!session.running)return;
+      if(!file){session.status='Audio was quiet around '+clock(item.at)+'.';return;}
+      session.status='Transcribing audio around '+clock(item.at)+'…';
+      renderPreview();
+      session.request=new AbortController();
+      const signal=AbortSignal.any([session.request.signal,AbortSignal.timeout(30_000)]);
+      const result=await api('/api/meeting/preview',{file,model:session.model},{signal});
+      if(!session.running)return;
+      if(result.status==='unloaded'){stopPreview('The transcription model is no longer loaded. Recording continues.');return;}
+      if(result.status==='busy'){
+        if(session.queue.length<session.buffer){
+          session.queue.unshift({...item,file,blob:null});
+          session.retry=setTimeout(()=>{session.retry=null;void drainPreview(session);},2000);
+        }else session.dropped++;
+        session.status='Tiiny is busy. Recording continues.';
+        return;
+      }
+      if(result.text){
+        session.lines.push({at:item.at,text:result.text});
+        if(session.lines.length>60)session.lines.shift();
+        renderPreviewLines();
+      }
+      session.status=result.status==='unreliable'?'Unreliable text omitted around '+clock(item.at)+'.':result.text?'Listening for the next clip…':'No transcript text around '+clock(item.at)+'.';
+    }catch(error){
+      if(session.running){session.dropped++;session.status=error.message+' Recording continues.';}
+    }finally{
+      session.request=null;
+      previewPending=false;
+      if(session.running)renderPreview();
+      void drainPreview(preview);
+    }
   }
   function previewClip(stream,session){
     if(!session.running)return;
     const at=(performance.now()-session.started)/1000;
-    const clip=new MediaRecorder(stream);
+    const clip=new MediaRecorder(stream,{audioBitsPerSecond:64000});
     session.recorder=clip;
     const chunks=[];
-    clip.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
-    clip.onstop=async()=>{
+    let bytes=0;
+    clip.ondataavailable=event=>{
+      bytes+=event.data.size;
+      if(bytes>2*1024*1024){stopPreview('A preview clip exceeded the browser size limit. Recording continues.');return;}
+      if(event.data.size)chunks.push(event.data);
+    };
+    clip.onstop=()=>{
       if(!session.running||preview!==session||!chunks.length)return;
-      if(previewPending){session.status='Preview skipped a clip while Tiiny was processing.';renderPreview();return;}
-      previewPending=true;
-      try{
-        session.status='Transcribing audio around '+clock(at)+'…';renderPreview();
-        const file=await transcriptionFile(new File(chunks,'Live preview',{type:clip.mimeType}),20);
-        if(!session.running||preview!==session)return;
-        const result=await api('/api/meeting/preview',{file,model:session.model});
-        if(!session.running||preview!==session)return;
-        if(result.status==='unloaded'){stopPreview('Load the selected transcription model, then start a new recording to preview it.');return;}
-        if(result.text)session.lines.push({at,text:result.text});
-        session.status=result.status==='busy'?'Tiiny is busy. Preview skipped this clip.':result.text?'Listening for the next clip…':'Tiiny returned no text for this clip. Listening…';
-        renderPreview();
-      }catch(error){
-        if(session.running&&preview===session){session.status=error.message;renderPreview();}
-      }finally{previewPending=false;}
+      if((previewPending||session.retry)&&session.queue.length>=session.buffer){
+        session.dropped++;
+        if(!session.buffer){renderPreview();return;}
+        session.queue.shift();
+      }
+      session.queue.push({at,captured:performance.now(),blob:new File(chunks,'Live preview.wav',{type:clip.mimeType})});
+      void drainPreview(session);
     };
     clip.onerror=()=>{if(preview===session)stopPreview('Live preview stopped. The full recording can still be transcribed.');};
     clip.start();
@@ -100,34 +193,57 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
     },previewSeconds*1000);
   }
   async function startCapture(){
-    const mode=el('#meeting-source').value,view=captureView;
+    if(starting||recorder||busy)return;
+    const view=captureView;
     starting=true;syncControls();
     try{
       if(!navigator.mediaDevices||typeof MediaRecorder==='undefined')throw Error('This browser cannot record audio here. Import a recording instead.');
-      source=mode==='tab'?await navigator.mediaDevices.getDisplayMedia({video:true,audio:true}):await navigator.mediaDevices.getUserMedia({audio:true});
+      if(mode==='tab'&&!navigator.mediaDevices.getDisplayMedia)throw Error('This browser cannot share tab audio. Use a microphone or import a recording.');
+      source=mode==='tab'?await navigator.mediaDevices.getDisplayMedia({
+        video:{displaySurface:'browser'},audio:true,systemAudio:'exclude',windowAudio:'exclude',monitorTypeSurfaces:'exclude',selfBrowserSurface:'exclude',
+      }):await navigator.mediaDevices.getUserMedia({audio:true});
       if(!visible||view!==captureView||!root.isConnected){source.getTracks().forEach(track=>track.stop());source=null;return;}
+      const surface=source.getVideoTracks()[0]?.getSettings().displaySurface;
+      if(mode==='tab'&&surface&&surface!=='browser')throw Error('Choose a browser tab to record tab audio.');
       const audio=source.getAudioTracks();
-      if(!audio.length)throw Error('The shared source has no audio. Choose a tab and enable audio sharing.');
+      if(!audio.length)throw Error(mode==='tab'?'The shared source has no audio. Choose a browser tab and enable tab audio.':'No microphone audio track was available.');
       const stream=new MediaStream(audio);
-      recorder=new MediaRecorder(stream);
+      recorder=new MediaRecorder(stream,{audioBitsPerSecond:96000});
       const chunks=[];
-      recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
-      recorder.onerror=()=>{tell('Audio recording stopped because the browser reported an error.');stop();};
+      let captureError='',bytes=0;
+      recorder.ondataavailable=event=>{
+        if(!event.data.size)return;
+        bytes+=event.data.size;
+        if(bytes>maxInputBytes){captureError='The capture exceeded the browser recording size limit.';stop();return;}
+        chunks.push(event.data);
+      };
+      recorder.onerror=()=>{captureError='The browser reported an audio recording error.';stop();};
       recorder.onstop=()=>{
         stopPreview('Preview stopped. Transcribe the full recording for a saved transcript.');
         const mime=recorder.mimeType,extension=mime.includes('mp4')?'m4a':mime.includes('ogg')?'ogg':'webm';
         source.getTracks().forEach(track=>track.stop());
-        source=null;recorder=null;clearTimeout(timer);
-        if(chunks.length)recording=new File(chunks,'Meeting recording.'+extension,{type:mime});
-        tell(chunks.length?'Recording ready. Choose Transcribe to send it to Tiiny.':'The browser returned no recorded audio.');
+        source=null;recorder=null;clearTimeout(timer);clearInterval(elapsedTimer);stopMeter();
+        if(chunks.length){
+          setRecording(new File(chunks,'Meeting recording.'+extension,{type:mime}));
+          if(el('#meeting-file'))el('#meeting-file').value='';
+        }
+        tell([captureError,chunks.length?'Play the recording or choose Transcribe to send it to Tiiny.':'The browser returned no recorded audio.'].filter(Boolean).join(' '));
         syncControls();
       };
       for(const track of source.getTracks())track.addEventListener('ended',stop,{once:true});
       recorder.start(1000);timer=setTimeout(stop,maxSeconds*1000);
+      captureStarted=performance.now();
+      el('#meeting-elapsed').textContent='00:00';
+      el('#meeting-input-level').value=0;
+      elapsedTimer=setInterval(()=>{if(visible)el('#meeting-elapsed').textContent=clock((performance.now()-captureStarted)/1000);},250);
+      try{startMeter(stream);}catch{/* Recording can continue when the meter is unavailable. */}
       tell('Recording '+(mode==='tab'?'shared audio':'microphone')+'…');
-      preview=previewEnabled?{model,running:!!model,started:performance.now(),lines:[],status:model?'Listening for the first 10-second clip…':'Choose a transcription model for live preview.'}:null;
+      const running=previewEnabled&&!!model&&isLoaded(model);
+      preview=previewEnabled?{model,running,started:captureStarted,lines:[],queue:[],buffer:previewBuffer,dropped:0,
+        status:running?'Listening for the first '+previewSeconds+' seconds…':'Load a transcription model before recording to use live preview.'}:null;
       renderPreview();
-      if(preview){try{previewClip(stream,preview);}catch(error){stopPreview(error.message);}}
+      renderPreviewLines();
+      if(running){try{previewClip(stream,preview);}catch(error){stopPreview(error.message);}}
     }catch(error){
       source?.getTracks().forEach(track=>track.stop());source=null;recorder=null;
       tell(error.name==='NotAllowedError'?'Audio access was canceled or denied. You can import a recording.':error.message);
@@ -146,6 +262,15 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
   }
   function update(force=false){
     if(!visible||!root?.isConnected)return;
+    if(!starting&&!recorder&&!busy){
+      const picker=el('#meeting-model'),options=modelOptions('asr',model||preferred('asr'));
+      if(picker.dataset.options!==options){
+        picker.innerHTML=options;
+        picker.dataset.options=options;
+        model=picker.value;
+        syncControls();
+      }
+    }
     const runs=getRuns().filter(run=>run.meeting);
     if(!runs.some(run=>run.id===selected))selected=runs[0]?.id||'';
     const run=runs.find(item=>item.id===selected);
@@ -168,14 +293,15 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
     player.hidden=!url;
     const progress=el('#meeting-progress');
     const total=run?.steps.length||0,done=run?.outputs.length||0;
+    const quiet=run?.outputs.filter(output=>output.quiet).length||0;
     progress.hidden=!total;
     if(total){progress.max=total;progress.value=done;}
     const phase=run?.status==='running'?(run.phase||'Transcribing'):run?.status;
-    el('#meeting-run-status').textContent=run?[phase,total?`${done} of ${total} audio sections processed`:null,run.error,run.restoreError].filter(Boolean).join(' · '):'';
+    el('#meeting-run-status').textContent=run?[phase,total?`${done} of ${total} audio sections processed`:null,quiet?`${quiet} near-silent ${quiet===1?'section':'sections'} skipped`:null,run.error,run.restoreError].filter(Boolean).join(' · '):'';
     const lines=meetingLines(run);
     el('#meeting-transcript-actions').innerHTML=copyButton(lines.map(line=>line.text).join('\n'),'transcript');
     el('#meeting-transcript').innerHTML=lines.length?lines.map((line,index)=>`<article data-transcript-line="${index}"><button class="text-button" type="button" data-meeting-seek="${line.at}">${line.approximate?'Around ':''}${clock(line.at)}</button>${line.speaker?' <strong>'+esc(line.speaker)+'</strong>':''}<p>${esc(line.text)}</p></article>`).join(''):
-      `<p class="help">${!run?'Choose a recording, then transcribe it to start the timeline.':done?'Tiiny returned no transcript text.':phase==='queued'||run.status==='running'?'Transcript text appears here as each audio section finishes.':'No transcript text was saved for this run.'}</p>`;
+      `<p class="help">${!run?'Choose a recording, then transcribe it to start the timeline.':done===total&&quiet===total?'The recording was near-silent. You can still play the saved audio.':done>quiet?'Tiiny returned no transcript text.':phase==='queued'||run.status==='running'?'Transcript text appears here as each audio section finishes.':'No transcript text was saved for this run.'}</p>`;
     renderMatches(run,lines);
     el('#meeting-summary').hidden=run?.status!=='completed'||!lines.length;
     const summaryActive=['queued','running'].includes(latest?.status),stopSummary=el('#meeting-summary-stop');
@@ -262,16 +388,23 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
         <label class="field"><span>Transcription model</span><select id="meeting-model">${modelOptions('asr',model||preferred('asr'))}</select></label>
         <label class="field"><span>Audio source</span><select id="meeting-source"><option value="mic">Microphone</option><option value="tab">Shared tab audio</option></select></label>
         <label class="field"><span>Import a recording</span><input id="meeting-file" type="file" accept="audio/*,video/webm,video/mp4"></label>
-        <label class="meeting-preview-toggle"><input id="meeting-preview-toggle" type="checkbox" ${previewEnabled?'checked':''}> Preview transcript while recording</label>
-        <p class="help">Live preview sends short audio clips to Tiiny using an already loaded transcription model. Use Transcribe after recording to save the full transcript.</p>
+        <p class="help" id="meeting-source-help"></p>
+        <label class="meeting-preview-toggle"><input id="meeting-preview-toggle" type="checkbox" ${previewEnabled?'checked':''}> Live transcription preview</label>
+        <div id="meeting-preview-settings">
+          <label class="field"><span>Preview backlog</span><select id="meeting-preview-buffer"><option value="0">Off</option><option value="2">2 clips · about 30 seconds</option><option value="4">4 clips · about 60 seconds</option></select></label>
+          <p class="help">Sends 15-second clips to the loaded speech recognition model on Tiiny. When the backlog fills, preview drops the oldest waiting clip. The full recording is available after stopping.</p>
+        </div>
         <div class="actions"><button id="meeting-record" class="button" type="button">Start recording</button><button id="meeting-stop" class="button quiet" type="button">Stop</button>
         <button id="meeting-load-model" class="button quiet" type="button" hidden>Load model for preview</button>
         <button id="meeting-transcribe" class="button primary" type="button">Transcribe</button></div>
-        <p id="meeting-input-name" class="help"></p><p id="meeting-status" role="status" class="help">${esc(status)}</p>
-        <p class="help">Up to 30 minutes per recording. Shared tab audio captures the call track. Microphone captures the room or your voice. Recordings and transcripts save locally.</p>
+        <div id="meeting-capture-state" hidden><span id="meeting-elapsed">00:00</span> <label>Input level <meter id="meeting-input-level" min="0" max="1" value="0"></meter></label></div>
+        <div id="meeting-draft" hidden><p id="meeting-input-name" class="help"></p><audio id="meeting-draft-player" aria-label="Play recording before transcription" controls preload="metadata"></audio><a id="meeting-download" class="text-button" download>Download audio</a></div>
+        <p id="meeting-status" role="status" class="help">${esc(status)}</p>
+        <p class="help">Up to 30 minutes. Shared tab mode captures the selected tab’s audio. Recordings and transcripts save locally after you submit them.</p>
+        <section id="meeting-preview" hidden><h2>Live preview</h2><p id="meeting-preview-status" class="help" role="status"></p><div id="meeting-preview-lines" tabindex="0" aria-label="Live preview transcript" role="region"></div></section>
       </section>
       <div class="meeting-grid"><section class="panel panel-body">
-        <h2>Transcript</h2><section id="meeting-preview" hidden><h3>Live preview</h3><p id="meeting-preview-status" class="help" role="status"></p><div id="meeting-preview-lines"></div></section>
+        <h2>Saved transcript</h2>
         <label class="field"><span>Saved meeting</span><select id="meeting-runs"></select></label>
         <audio id="meeting-player" controls preload="metadata" hidden></audio><progress id="meeting-progress" aria-label="Audio sections processed" hidden></progress><p id="meeting-run-status" class="help" role="status"></p>
         <details id="meeting-summary" class="section-gap" hidden><summary>Summary &amp; minutes</summary>
@@ -293,21 +426,30 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
           <div id="meeting-research-results"></div>
         </aside></div></section>`;
     model=el('#meeting-model').value;
+    el('#meeting-source').value=mode;
+    el('#meeting-preview-buffer').value=String(previewBuffer);
     el('#meeting-title').oninput=event=>{title=event.target.value;};
     el('#meeting-model').onchange=event=>{model=event.target.value;syncControls();};
     el('#meeting-preview-toggle').onchange=event=>{previewEnabled=event.target.checked;syncControls();};
+    el('#meeting-preview-buffer').onchange=event=>{previewBuffer=Number(event.target.value);};
+    el('#meeting-source').onchange=event=>{mode=event.target.value;syncControls();};
     el('#meeting-load-model').onclick=async()=>{
       const chosen=model;
       loadingModel=true;syncControls();tell('Loading the transcription model…');
       try{
         await api('/api/model',{id:chosen,action:'start'});
         await onModelLoaded();
-        if(visible)el('#meeting-model').innerHTML=modelOptions('asr',model);
+        update();
         tell('Transcription model loaded. Start recording to preview text.');
       }catch(error){tell(error.message);}
       finally{loadingModel=false;syncControls();}
     };
-    el('#meeting-file').onchange=event=>{recording=event.target.files[0]||null;syncControls();};
+    el('#meeting-file').onchange=event=>{
+      const file=event.target.files[0];
+      if(!file)return;
+      if(file.size>maxInputBytes){event.target.value='';tell('Choose a recording under 64 MiB, or split it into smaller files.');return;}
+      setRecording(file);preview=null;renderPreview();syncControls();tell('Recording imported. You can play it before sending it to Tiiny.');
+    };
     el('#meeting-record').onclick=()=>void startCapture();
     el('#meeting-stop').onclick=stop;
     el('#meeting-player').onloadedmetadata=()=>{if(pendingSeek!==null)seekRecording(pendingSeek);};
@@ -319,14 +461,16 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
       try{
         const file=await transcriptionFile(recording,maxSeconds);
         const run=await api('/api/meeting/transcribe',{title:title||recording.name,file,model});
-        selected=run.id;recording=null;preview=null;renderPreview();onQueued(run);tell('Recording submitted to Tiiny.');update(true);
+        selected=run.id;setRecording(null);preview=null;
+        if(el('#meeting-file'))el('#meeting-file').value='';
+        renderPreview();onQueued(run);tell('Recording submitted to Tiiny.');update(true);
       }catch(error){tell(error.message);}
       finally{busy=false;syncControls();}
     };
     el('#meeting-runs').onchange=event=>{selected=event.target.value;el('#meeting-search').hidden=true;update(true);};
     el('#meeting-terms').oninput=event=>{
       terms=event.target.value;const run=getRuns().find(item=>item.id===selected);
-      renderMatches(run,meetingLines(run));renderPreview();
+      renderMatches(run,meetingLines(run));renderPreviewLines();
     };
     el('#meeting-summary-model').onchange=()=>update(true);
     el('#meeting-summary-stop').onclick=async event=>{
@@ -398,7 +542,12 @@ export function createMeetingDesk({api,escape:esc,getRuns,modelOptions,preferred
       catch(error){tell(error.message);}
       finally{providerBusy=false;button.disabled=false;}
     };
-    update(true);renderPreview();syncControls();
+    update(true);renderPreview();renderPreviewLines();syncControls();
   }
-  return {mount,update,openRun,leave(){visible=false;captureView++;stopPreview('Preview stopped.');stop();}};
+  return {mount,update,openRun,leave(){
+    if(!visible)return;
+    el('#meeting-draft-player')?.pause();
+    el('#meeting-player')?.pause();
+    visible=false;captureView++;stop();
+  }};
 }

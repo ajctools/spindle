@@ -38,11 +38,11 @@ export function csv(models) {
   const esc=csvCell;
   return [keys.map(esc).join(','),...models.map(m=>keys.map(k=>esc(m[k])).join(','))].join('\r\n');
 }
-export function parseDataUrl(file) {
+export function parseDataUrl(file,maxBytes=40*1024*1024,sizeError='Files must be under 40 MiB.') {
   const match=/^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(file?.data || '');
   if(!match) throw new Error('Select a valid file first.');
   const buffer=Buffer.from(match[2],'base64');
-  if(buffer.length>40*1024*1024) throw new Error('Files must be under 40 MiB.');
+  if(buffer.length>maxBytes) throw new Error(sizeError);
   return {mime:match[1],buffer,name:file.name || 'input'};
 }
 export function validatePCM(file) {

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
-import {parseDataUrl,validatePCM} from './core.mjs';
-import {meetingLines,meetingClock} from './public/meeting-transcript.mjs';
+import {parseDataUrl} from './core.mjs';
+import {meetingLines,meetingClock,quietAudio} from './public/meeting-transcript.mjs';
 
 export const meetingLimitSeconds=30*60;
 export const meetingChunkSeconds=60;
@@ -30,18 +30,20 @@ export function meetingSummaryStep(run,model,{packet=false}={}){
   return {task:'chat',model:model.id,prompt,promptMode:'literal',params:{max_tokens:responseTokens,_spindleWebSearch:{enabled:false}}};
 }
 
-export function meetingRecording(file){
-  validatePCM(file);
-  const {buffer}=parseDataUrl(file);
-  if(buffer.length<=headerBytes||buffer.toString('ascii',36,40)!=='data'
-    ||buffer.readUInt32LE(16)!==16||buffer.readUInt32LE(40)!==buffer.length-headerBytes
+export function meetingRecording(file,maxSeconds=meetingLimitSeconds){
+  const sizeError=maxSeconds===meetingLimitSeconds?'Choose a recording up to 30 minutes long.':'Live preview clips must be 20 seconds or shorter.';
+  const {buffer}=parseDataUrl(file,headerBytes+maxSeconds*bytesPerSecond,sizeError);
+  if(buffer.length<=headerBytes||buffer.toString('ascii',0,4)!=='RIFF'||buffer.toString('ascii',8,16)!=='WAVEfmt '
+    ||buffer.readUInt32LE(4)!==buffer.length-8||buffer.readUInt32LE(16)!==16
+    ||buffer.readUInt16LE(20)!==1||buffer.readUInt16LE(22)!==1||buffer.readUInt32LE(24)!==16000
+    ||buffer.readUInt32LE(28)!==bytesPerSecond||buffer.readUInt16LE(32)!==2||buffer.readUInt16LE(34)!==16
+    ||buffer.toString('ascii',36,40)!=='data'||buffer.readUInt32LE(40)!==buffer.length-headerBytes
     ||(buffer.length-headerBytes)%2)throw Error('Choose a recording prepared by Meeting Desk.');
   const duration=(buffer.length-headerBytes)/bytesPerSecond;
-  if(duration>meetingLimitSeconds)throw Error('Choose a recording up to 30 minutes long.');
   return {buffer,duration,chunks:Math.ceil(duration/meetingChunkSeconds)};
 }
 
-export async function meetingChunk(path,index){
+export async function meetingChunk(path,index,{skipQuiet=false}={}){
   const source=await fs.open(path,'r');
   try{
     const {size}=await source.stat();
@@ -51,6 +53,7 @@ export async function meetingChunk(path,index){
     const header=Buffer.alloc(headerBytes),data=Buffer.alloc(length);
     if((await source.read(header,0,headerBytes,0)).bytesRead!==headerBytes
       ||(await source.read(data,0,length,offset)).bytesRead!==length)throw Error('The recording could not be read.');
+    if(skipQuiet&&quietAudio(length/2,sample=>data.readInt16LE(sample*2)/32768))return null;
     header.writeUInt32LE(36+length,4);header.writeUInt32LE(length,40);
     return {name:'meeting-'+(index+1)+'.wav',data:'data:audio/wav;base64,'+Buffer.concat([header,data]).toString('base64')};
   }finally{await source.close();}

@@ -18,3 +18,13 @@ test('recovery sends authentication failures to Connection and keeps a precise w
   const message='Step 2: Transcription needs audio.';assert.equal(recovery(message).text,message);
   assert.equal(recovery('The NPU stayed busy.').action,'models');
 });
+
+test('audio recovery identifies the failed stage while keeping authentication guidance',()=>{
+  assert.match(recovery('Tiiny 500: The upstream TTS model failed.','speech').title,/speech model/);
+  assert.match(recovery('Tiiny 500: The upstream TTS model failed.','voice-reference').title,/Reference-voice/);
+  assert.match(recovery('fetch failed','music-generation').title,/Music generation/);
+  assert.match(recovery('Tiiny 400: Extra inputs are not permitted in config: lyric_text','music-generation').title,/music runtime rejected/i);
+  assert.match(recovery('The operation timed out','music-runtime').title,/runtime check/);
+  assert.match(recovery('Tiiny returned no playable audio.','audio-response').title,/Audio response/);
+  assert.equal(recovery('Tiiny 401: Invalid API key','music-generation').action,'connection');
+});

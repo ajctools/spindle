@@ -46,7 +46,7 @@ export function createChatTrace(){
     const runNumbers=new Map();
     const events=capture.events.map(({runId,origin,...event})=>{
       if(runId&&!runNumbers.has(runId))runNumbers.set(runId,runNumbers.size+1);
-      return {...event,run:runNumbers.get(runId)??null,origin:['chat','check'].includes(event.kind)||event.unexpected?null:origin};
+      return {...event,run:runNumbers.get(runId)??null,origin:['chat','check','page'].includes(event.kind)||event.unexpected?null:origin};
     });
     return {...capture,events};
   }
@@ -80,5 +80,11 @@ export function createChatTrace(){
     }
     return response;
   }
-  return {get active(){return capture?.active===true;},start,stop,clear,snapshot,request};
+  function recordPage(runId,origin){
+    const recording=capture;
+    if(!recording?.active)return;
+    if(recording.events.length===limit){recording.events.shift();recording.dropped++;}
+    recording.events.push({runId,kind:'page',origin,protocol:'https:',sent:['Article path'],unexpected:false,outcome:'pending'});
+  }
+  return {get active(){return capture?.active===true;},start,stop,clear,snapshot,request,recordPage};
 }

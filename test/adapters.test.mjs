@@ -12,11 +12,13 @@ test('all multimodal adapters preserve their request and output contracts',async
   const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),data=await fs.mkdtemp(path.join(root,'test','.runtime-'));
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7ioAAAAASUVORK5CYII=','base64');
   const wav=Buffer.alloc(46);wav.write('RIFF');wav.writeUInt32LE(38,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(2,40);
+  const quietWav=Buffer.from(wav);
+  wav.writeInt16LE(1234,44);
   const models=Object.entries(tasks).map(([k,v])=>({id:'fixture/'+k,model_id:'fixture/'+k,name:k,type:v.types[0],input:k==='chat'?'Text,Image':'Text',output:v.output,npu_usage:0}));
   const seen=new Set();
   const meetingLoaded=new Set(['fixture/asr']);
   let meetingMode=false;
-  let asrLoaded=true,previewRequests=0,summaryMessages,musicAttempts=0;
+  let asrLoaded=true,previewRequests=0,asrRequests=0,previewReply='A transcribed sentence.',holdPreview,startedPreview,summaryMessages,musicAttempts=0,emptyMeeting=false;
   const meshStages=[];
   const shapeBytes=Buffer.from('saved shape archive fixture');
   const device=http.createServer(async(req,res)=>{
@@ -49,10 +51,20 @@ test('all multimodal adapters preserve their request and output contracts',async
     }
     if(p==='/v1/images/generations'){seen.add('image');assert.equal(JSON.parse(raw).size,'512x512');return json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:10,output_tokens:90,total_tokens:100}});}
     if(p==='/v1/image/generate'){seen.add('edit');assert.match(JSON.parse(raw).image,/^data:image/);res.setHeader('X-Token-Usage',JSON.stringify({input_tokens:5,output_tokens:45,total_tokens:50}));return binary(png,'image/png');}
-    if(p==='/v1/audio/transcriptions'){seen.add('asr');if(raw.includes(Buffer.from('preview.wav')))previewRequests++;assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));return json({text:'A transcribed sentence.',segments:[{start:0,text:'A transcribed sentence.',speaker:'fixture voice'}]});}
+    if(p==='/v1/audio/transcriptions'){
+      seen.add('asr');asrRequests++;assert.match(req.headers['content-type'],/multipart/);assert.ok(raw.includes(Buffer.from('RIFF')));
+      if(raw.includes(Buffer.from('preview.wav'))){
+        previewRequests++;
+        startedPreview?.();
+        if(holdPreview)await holdPreview;
+        return json({text:previewReply});
+      }
+      return json(emptyMeeting?{text:'',segments:[]}:{text:'A transcribed sentence.',segments:[{start:0,text:'A transcribed sentence.',speaker:'fixture voice'}]});
+    }
     if(p==='/v1/audio/speech'){seen.add('speech');return json({success:true,audio_data:wav.toString('base64')});}
     if(p==='/v1/music/generate/wav'){
       seen.add('music');const b=JSON.parse(raw);
+      if(b.config.caption==='Fixture lost response'){req.socket.destroy();return;}
       if(++musicAttempts===1){
         assert.equal(b.config.generation_type,'mixed');assert.equal(b.config.lyric_text,'[instrumental]');res.statusCode=400;
         return json({error:{message:'Extra inputs are not permitted in config: lyric_text'}});
@@ -105,7 +117,10 @@ test('all multimodal adapters preserve their request and output contracts',async
     const home=await fetch(base),cookie=home.headers.get('set-cookie').split(';')[0];
     const get=route=>fetch(base+route,{headers:{cookie}});await get('/api/state');
     const image={name:'fixture.png',data:'data:image/png;base64,'+png.toString('base64')},audio={name:'fixture.wav',data:'data:audio/wav;base64,'+wav.toString('base64')};
-    const preview=()=>fetch(base+'/api/meeting/preview',{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify({model:'fixture/asr',file:{...audio,name:'preview.wav'}})});
+    const preview=(model='fixture/asr',headers={cookie})=>fetch(base+'/api/meeting/preview',{method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify({model,file:{...audio,name:'preview.wav'}})});
+    assert.equal((await preview('fixture/asr',{})).status,403);
+    assert.equal((await preview('fixture/asr',{cookie,origin:'https://fixture.invalid'})).status,403);
+    assert.equal((await preview('fixture/chat')).status,400);
     asrLoaded=false;
     assert.deepEqual(await (await preview()).json(),{status:'unloaded'});
     assert.equal(previewRequests,0);
@@ -114,6 +129,21 @@ test('all multimodal adapters preserve their request and output contracts',async
     assert.equal(previewResult.status,200);
     assert.deepEqual(await previewResult.json(),{status:'ready',text:'A transcribed sentence.'});
     assert.equal(previewRequests,1);
+    let release;
+    holdPreview=new Promise(resolve=>{release=resolve;});
+    const started=new Promise(resolve=>{startedPreview=resolve;});
+    previewReply='the top of '.repeat(30);
+    const processing=preview();
+    try{
+      await Promise.race([started,processing.then(()=>assert.fail('Preview never reached ASR'))]);
+      assert.deepEqual(await (await preview()).json(),{status:'busy'});
+      assert.equal(previewRequests,2);
+    }finally{release();holdPreview=null;startedPreview=null;}
+    assert.deepEqual(await (await processing).json(),{status:'unreliable'});
+    previewReply='X'.repeat(300000);
+    const limited=await preview();
+    assert.equal(limited.status,400);
+    assert.match((await limited.json()).error,/local size limit/);
     assert.deepEqual(await (await get('/api/runs')).json(),[]);
     assert.deepEqual(await fs.readdir(path.join(data,'assets')),[]);
     const steps=Object.keys(tasks).map(task=>({task,model:'fixture/'+task,prompt:'Test input',params:task==='image'?{width:512,height:512}:{},documents:task==='rerank'?['Relevant','Unrelated']:undefined,file:['ocr','mesh'].includes(task)?image:task==='asr'?audio:undefined}));
@@ -160,7 +190,27 @@ test('all multimodal adapters preserve their request and output contracts',async
     assert.equal(textured.outputs[1].canApplyTexture,false);
     assert.ok((await get(shape.assets[0].url)).ok);
     assert.ok((await get(textured.outputs[1].assets[0].url)).ok);
+    const brokenMusic=await post('/api/run',{steps:[{task:'music',model:'fixture/music',prompt:'Fixture lost response'}]});
+    assert.equal(brokenMusic.status,202);
+    const musicFailure=await waitForRun((await brokenMusic.json()).id);
+    assert.equal(musicFailure.status,'failed');
+    assert.equal(musicFailure.audioFailure,'music-generation');
+    assert.equal(musicAttempts,2);
     meetingMode=true;
+    const asrBeforeQuiet=asrRequests;
+    const quiet=await post('/api/meeting/transcribe',{model:'fixture/asr',file:{...audio,data:'data:audio/wav;base64,'+quietWav.toString('base64')}});
+    assert.equal(quiet.status,202);
+    const quietMeeting=await waitForRun((await quiet.json()).id);
+    assert.equal(quietMeeting.status,'completed');
+    assert.equal(quietMeeting.outputs[0].quiet,true);
+    assert.equal(asrRequests,asrBeforeQuiet);
+    emptyMeeting=true;
+    const empty=await post('/api/meeting/transcribe',{model:'fixture/asr',file:audio});
+    assert.equal(empty.status,202);
+    const emptyRun=await waitForRun((await empty.json()).id);
+    assert.equal(emptyRun.status,'completed');
+    assert.equal(emptyRun.outputs[0].text,'');
+    emptyMeeting=false;
     const recording=await post('/api/meeting/transcribe',{title:'Fixture meeting',model:'fixture/asr',file:audio});
     assert.equal(recording.status,202);
     const meeting=await waitForRun((await recording.json()).id);

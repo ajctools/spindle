@@ -1,4 +1,29 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {musicRequest,musicNeedsTopLevel,musicSchemaFallback} from '../music.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import {musicRequest,musicNeedsTopLevel,musicSchemaFallback,requestMusicAudio} from '../music.mjs';
+
+test('music transport waits for delayed headers, honors cancellation and rejects redirects',async t=>{
+  let redirected=0;
+  const waiting=Promise.withResolvers();
+  const server=http.createServer(async(req,res)=>{
+    if(req.url==='/elsewhere'){redirected++;res.end();return;}
+    if(req.url==='/redirect'){res.writeHead(307,{Location:'/elsewhere'});res.end();return;}
+    if(req.url==='/wait'){waiting.resolve();return;}
+    const chunks=[];for await(const chunk of req)chunks.push(chunk);
+    await new Promise(resolve=>setTimeout(resolve,35));
+    res.writeHead(200,{'Content-Type':'audio/wav'});res.end(Buffer.concat(chunks));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+  const base='http://127.0.0.1:'+server.address().port;
+  const options={method:'POST',headers:{'Content-Type':'application/json'},body:'{"caption":"é"}'};
+  const response=await requestMusicAudio(base+'/audio',options);
+  assert.equal(response.headers.get('content-type'),'audio/wav');
+  assert.equal(await response.text(),options.body);
+  const controller=new AbortController();
+  const cancellation=assert.rejects(requestMusicAudio(base+'/wait',{...options,signal:controller.signal}),{name:'AbortError'});
+  await waiting.promise;controller.abort();await cancellation;
+  await assert.rejects(requestMusicAudio(base+'/redirect',options),/redirected/);
+  assert.equal(redirected,0);
+});
 test('music adapters use reported modes and native lyric_text while pinning the model',()=>{const model={id:'fixture/music'},info={model_info:{model:{supported_generation_types:['mixed']}},default_config:{generation_type:'mixed'}};assert.deepEqual(musicRequest(model,'Calm instrumental',{},info),{model:model.id,config:{caption:'Calm instrumental',generation_type:'mixed',lyric_text:'[instrumental]'}});const lyrical=musicRequest(model,'A melody',{lyrics:'The supplied words',duration:20},info);assert.equal(lyrical.config.lyric_text,'The supplied words');assert.equal(lyrical.config.lyrics,undefined);assert.equal(lyrical.config.duration,20);assert.equal(musicRequest(model,'Ambient',{},{}).config.generation_type,'bgm');});
 test('Foundation uses top-level prompt and omits incompatible generic controls',()=>{const model={id:'fixture/Foundation-1'},body=musicRequest(model,'A gentle museum soundscape',{generation_type:'bgm',duration:30});assert.deepEqual(body,{model:model.id,prompt:'A gentle museum soundscape',config:{duration:30}});assert.throws(()=>musicRequest(model,'Song',{lyrics:'Sing these words'}),/lyric-capable/);assert.equal(musicRequest({id:'fixture/custom'},'Sound',{}, {family:'Foundation'}).prompt,'Sound');});
 test('schema adaptation is limited to explicit native top-level-prompt validation errors',()=>{assert.equal(musicNeedsTopLevel(new Error('Tiiny 422: {"detail":[{"loc":["body","prompt"],"type":"missing"},{"loc":["body","config","caption"],"type":"extra_forbidden"}]}')),true);for(const message of ['Tiiny 500: worker stopped','Tiiny 401: unauthorized','Tiiny 422: invalid duration'])assert.equal(musicNeedsTopLevel(message),false);});

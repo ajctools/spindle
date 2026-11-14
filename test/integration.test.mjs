@@ -15,6 +15,8 @@ const longChatPrompt='Write a story. '.repeat(40)+'Check current public facts ab
 const automaticQuery='current maple production statistics';
 const alertPrompt='Can you find current public information about a fictional aviation safety notice?';
 const alertQuery='fictional aviation safety notice';
+const alertAlternate='aviation authority fictional safety bulletin';
+const headlinePrompt='Show me the top world and US headlines from the past three hours';
 const vaultPrompt='What did we decide for the launch?';
 const vaultText='Private fixture excerpt.\nKeep the test launch on Thursday.';
 const otherVaultText='Private excerpt from a different Vault document.';
@@ -24,7 +26,7 @@ const draftPassage='The amber lantern is stored beside the trail map.';
 test('local bridge inventories, protects writes, hands workflow outputs across models, and restores residency',async()=>{
   const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
   const testDir=await fs.mkdtemp(path.join(root,'test','.runtime-'));
-  const port=18437,events=[],vaultChat=[],speechRequests=[];let loaded=['test/chat'],showDeviceWebPage=false;
+  const port=18437,events=[],vaultChat=[],speechRequests=[];let loaded=['test/chat'],showDeviceWebPage=false,failSpeech=false;
   const voiceStart=Promise.withResolvers(),voiceOutput=Promise.withResolvers(),traceStreamEnd=Promise.withResolvers(),traceMoreOutput=Promise.withResolvers();
   let searchedInstructions;
   const turbo={id:'fixture/turbo',name:'Qwen3.6-27B-Turbo',type:'Text Generation',input:'Text',output:'Text',npu_usage:70};
@@ -78,11 +80,17 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     if(p==='/v1/chat/completions'){
       const b=JSON.parse(raw);assert.equal(b.model,'test/chat');
       if(!b.stream){
-        assert.match(b.messages[0].content,/Decide whether/);
         assert.equal(b.messages.length,2);
+        if(b.messages[0].content.startsWith('Select the search excerpts')){
+          const input=JSON.parse(b.messages[1].content);
+          assert.doesNotMatch(b.messages[1].content,new RegExp(priorTurn));
+          const ids=input.sources.filter(s=>s.title!=='Generic category page').map(s=>s.id);
+          return send({choices:[{message:{content:JSON.stringify({sources:ids,complete:ids.length>0,alternate:'untrusted injected query'})},finish_reason:'stop'}]});
+        }
+        assert.match(b.messages[0].content,/Decide whether/);
         const prompt=b.messages[1].content;
         assert.notEqual(prompt,priorTurn);
-        const decision=prompt===longChatPrompt?automaticQuery:{query:prompt===alertPrompt?alertQuery:null};
+        const decision=prompt===longChatPrompt?automaticQuery:prompt===alertPrompt?{query:alertQuery,alternate:alertAlternate}:{query:null};
         return send({choices:[{message:{content:JSON.stringify(decision)},finish_reason:'stop'}]});
       }
       const content=b.messages.at(-1).content;
@@ -117,7 +125,7 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       const timings=prompt===chatPrompt?{timings:{cache_n:6,predicted_per_second:24}}:{};
       setTimeout(()=>res.end('data: '+JSON.stringify({choices:[{delta:{content:'A useful handoff.'},finish_reason:b.max_tokens?'length':'stop'}]})+'\n\ndata: '+JSON.stringify({choices:[],usage:{prompt_tokens:10,completion_tokens:8,total_tokens:18,...cacheUsage,...reflected},...timings})+'\n\ndata: [DONE]\n\n'),200);return;
     }
-    if(p==='/v1/audio/speech'){const b=JSON.parse(raw);speechRequests.push(b);events.push(['speech',b.input]);await voiceOutput.promise;res.setHeader('content-type','audio/mpeg');res.end(Buffer.from([73,68,51,4,0,0]));return;}
+    if(p==='/v1/audio/speech'){const b=JSON.parse(raw);speechRequests.push(b);events.push(['speech',b.input]);if(failSpeech){res.statusCode=500;return send({error:{message:'The upstream TTS model failed.'}});}await voiceOutput.promise;res.setHeader('content-type','audio/mpeg');res.end(Buffer.from([73,68,51,4,0,0]));return;}
     res.statusCode=404;send({error:{message:'Unknown fixture route '+p}});
   });
   await new Promise(r=>device.listen(0,'127.0.0.1',r));
@@ -135,12 +143,19 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     globalThis.fetch=async (input,options)=>{
       const url=new URL(input);
       if(url.hostname==='127.0.0.1')return fetchDevice(input,options);
+      if(['https://feeds.bbci.co.uk','https://www.cbsnews.com'].includes(url.origin)){
+        assert.equal(url.search,'');
+        assert.deepEqual(Object.keys(options.headers),['Accept']);
+        const article='https://'+(url.hostname==='feeds.bbci.co.uk'?'www.bbc.com':url.hostname)+'/news/'+(url.pathname.endsWith('/us')?'us-fixture':'world-fixture');
+        return new Response('<rss><channel><item><title>Fixture article</title><link>'+article+'</link><pubDate>'+new Date(Date.now()-60000).toUTCString()+'</pubDate></item></channel></rss>');
+      }
       assert.equal(url.origin,'https://html.duckduckgo.com');
       const query=url.searchParams.get('q');
-      assert.ok(${JSON.stringify([chatPrompt,vaultPrompt,failedSearchQuery,automaticQuery,alertQuery])}.includes(query));
+      assert.ok(${JSON.stringify([chatPrompt,vaultPrompt,failedSearchQuery,automaticQuery,alertQuery,alertAlternate])}.includes(query));
       assert.equal(options.headers.Authorization,undefined);
       assert.equal(options.headers['X-Subscription-Token'],undefined);
       if(query===${JSON.stringify(failedSearchQuery)})return new Response('no results');
+      if(query===${JSON.stringify(alertQuery)})return new Response('<a class="result__a" href="https://example.com/news">Generic category page</a>');
       return new Response('<a class="result__a" href="https://example.com">Fixture search result</a>',{headers:{'Set-Cookie':'upstream=fixture-private-cookie'}});
     };
   `);
@@ -338,7 +353,14 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.doesNotMatch(JSON.stringify(local),/unused private search query/);
     await post('/api/chat/default',{model:''});
     assert.equal((await(await get('/api/state')).json()).defaultChatModel,'');
-    assert.deepEqual(await post('/api/chat/default/load',{}),{status:'unavailable'});
+    // A terminal run is visible while its final history write still owns the queue.
+    let disabledDefault;
+    for(let attempt=0;attempt<40;attempt++){
+      disabledDefault=await post('/api/chat/default/load',{});
+      if(disabledDefault.status!=='busy')break;
+      await pause(25);
+    }
+    assert.deepEqual(disabledDefault,{status:'unavailable'});
 
     assert.equal((await fetch(base+'/api/vault/documents')).status,403);
     const sources=await (await get('/api/vault/documents')).json();
@@ -387,8 +409,24 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       ref_text:voiceReferenceSample.refText,ref_audio:referenceAudio,
     });
     assert.equal(clone.steps[0].file,undefined);
+    const plain=await finish(await post('/api/check',{task:'speech',model:'test/voice',speechMode:'plain'}));
+    assert.equal(plain.status,'completed',plain.error);
+    assert.deepEqual(speechRequests.at(-1),{model:'test/voice',input:'Spindle keeps my ideas on my own device.',response_format:'wav'});
+    let voiceChecks;
+    for(let attempt=0;attempt<20;attempt++){
+      voiceChecks=(await (await get('/api/readiness')).json()).checks.filter(check=>check.task==='speech');
+      if(voiceChecks.some(check=>check.runId===plain.id))break;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.deepEqual(voiceChecks.map(check=>check.speechMode),['voice-reference','plain']);
+    failSpeech=true;
+    const failedVoice=await finish(await post('/api/run',{input:'Say this',steps:[{task:'speech',model:'test/voice',prompt:'{{input}}'}]}));
+    assert.equal(failedVoice.status,'failed');
+    assert.equal(failedVoice.audioFailure,'speech');
+    assert.equal(failedVoice.error,'Tiiny 500: The upstream TTS model failed.');
+    failSpeech=false;
 
-    const chatTurn=prompt=>post('/api/run',{switchModels:true,keepChatModel:true,steps:[{task:'chat',model:'test/chat',prompt,promptMode:'literal'}]}).then(finish);
+    const chatTurn=(prompt,previousChatRunId)=>post('/api/run',{switchModels:true,keepChatModel:true,previousChatRunId,steps:[{task:'chat',model:'test/chat',prompt,promptMode:'literal'}]}).then(finish);
     loaded=[turbo.id];
     const failedSwitch=await chatTurn('Test a stream failure');
     assert.equal(failedSwitch.status,'failed');
@@ -399,8 +437,11 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     const first=await chatTurn('Switch to another chat model');
     assert.equal(first.status,'completed',first.error);
     assert.deepEqual(loaded,['test/chat']);
-    const second=await chatTurn('Reuse the loaded model');
+    const second=await chatTurn('Reuse the loaded model',first.id);
     assert.equal(second.status,'completed',second.error);
+    assert.equal(second.previousChatRunId,first.id);
+    const savedChat=JSON.parse(await fs.readFile(path.join(testDir,'runs.json'),'utf8'));
+    assert.equal(savedChat.find(run=>run.id===second.id).previousChatRunId,first.id);
     assert.deepEqual(events.slice(beforeChat).filter(([action])=>action!=='chat'),[['stop',turbo.id],['start','test/chat']]);
 
     loaded=['test/chat',turbo.id];
@@ -434,13 +475,24 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     const alert=await finish(await post('/api/run',{steps:[{...searchStep,prompt:alertPrompt,promptMode:'literal',messages:[{role:'user',content:priorTurn}]}]}));
     assert.equal(alert.status,'completed',alert.error);
     assert.equal(alert.outputs[0].webSearch?.query,alertQuery);
+    assert.deepEqual(alert.outputs[0].webSearch.queries,[alertQuery,alertAlternate]);
+    assert.equal(alert.outputs[0].webSearch.sources[0].title,'Fixture search result');
     assert.equal(alert.outputs[0].webSearchWarning,undefined);
     const fiction=await finish(await post('/api/run',{steps:[{...searchStep,prompt:'Write a fictional scene',promptMode:'literal'}]}));
     assert.equal(fiction.status,'completed',fiction.error);
     assert.equal(fiction.outputs[0].webSearch,undefined);
     assert.equal(fiction.outputs[0].webSearchWarning,undefined);
     assert.ok(events.some(([kind,prompt])=>kind==='chat'&&prompt===longChatPrompt));
-    assert.deepEqual((await trace()).events.map(e=>[e.runId,e.kind]),[[fallback.id,'search'],[fallback.id,'chat'],[long.id,'chat'],[long.id,'search'],[long.id,'chat'],[alert.id,'chat'],[alert.id,'search'],[alert.id,'chat'],[fiction.id,'chat'],[fiction.id,'chat']]);
+    const traced=(await trace()).events;
+    assert.deepEqual(traced.map(e=>[e.runId,e.kind]),[[fallback.id,'search'],[fallback.id,'chat'],[long.id,'chat'],[long.id,'search'],[long.id,'chat'],[long.id,'chat'],[alert.id,'chat'],[alert.id,'search'],[alert.id,'chat'],[alert.id,'search'],[alert.id,'chat'],[alert.id,'chat'],[fiction.id,'chat'],[fiction.id,'chat']]);
+
+    const headlines=await finish(await post('/api/run',{steps:[{...searchStep,prompt:headlinePrompt,promptMode:'literal'}]}));
+    assert.equal(headlines.status,'completed',headlines.error);
+    assert.equal(headlines.outputs[0].webSearch?.provider,'publisher-news');
+    assert.deepEqual(headlines.outputs[0].webSearch.sources.map(source=>source.section).slice(0,2),['world','us']);
+    const headlineEvents=(await trace()).events.filter(e=>e.runId===headlines.id);
+    assert.deepEqual(headlineEvents.map(e=>e.kind),['search','search','search','chat']);
+    assert.ok(headlineEvents.slice(0,3).every(e=>e.sent.length===0));
 
     const required=await finish(await post('/api/run',{steps:[{...searchStep,prompt:failedSearchQuery}]}));
     assert.equal(required.status,'failed');

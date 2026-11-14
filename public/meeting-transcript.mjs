@@ -1,5 +1,33 @@
 export const meetingClock=seconds=>[Math.floor(seconds/60),Math.floor(seconds%60)].map(value=>String(value).padStart(2,'0')).join(':');
 
+// A conservative near-silence check, in 20 ms frames at 16 kHz.
+export function quietAudio(length,sampleAt){
+  let energy=0;
+  for(let i=0;i<length;i++){
+    const sample=sampleAt(i);
+    energy+=sample*sample;
+    if((i+1)%320===0||i===length-1){
+      if(energy/((i%320)+1)>=0.002**2)return false;
+      energy=0;
+    }
+  }
+  return true;
+}
+
+export function previewText(text){
+  if(typeof text!=='string'||!text.trim())return {text:''};
+  if(text.length>4000)return {text:'',unreliable:true};
+  const words=text.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu)||[];
+  for(let width=1;width<=8;width++){
+    let same=0;
+    for(let i=width;i<words.length;i++){
+      same=words[i]===words[i-width]?same+1:0;
+      if(same>=7*width)return {text:'',unreliable:true};
+    }
+  }
+  return {text:text.trim()};
+}
+
 export function meetingLines(run){
   if(!run?.meeting)return [];
   return (run.outputs||[]).flatMap((output,index)=>{

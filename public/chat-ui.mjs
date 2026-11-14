@@ -1,6 +1,27 @@
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export {withResponseLimit} from './chat-settings.mjs';
 
+export function isChatRun(run){
+  return run?.keepChatModel===true&&run.steps?.length===1&&run.steps[0].task==='chat'&&run.steps[0].promptMode==='literal';
+}
+
+export function chatReply(run){
+  const step=run.outputs.length-1,output=run.outputs[step];
+  if(output?.task!=='chat')return null;
+  const {text,reasoning,webSearch,webSearchWarning,finishReason,responseLimit}=output;
+  return {role:'assistant',content:text,reasoning,webSearch,webSearchWarning,finishReason,responseLimit,runId:run.id,step};
+}
+
+export function restoreChat(run,runs){
+  const byId=new Map(runs.map(item=>[item.id,item])),seen=new Set(),turns=[];
+  for(let turn=run;isChatRun(turn)&&!seen.has(turn.id);turn=byId.get(turn.previousChatRunId)){
+    seen.add(turn.id);
+    const {prompt,attachments}=turn.steps[0],reply=turn.status==='completed'?chatReply(turn):null;
+    turns.push([{role:'user',content:prompt,attachments},...(reply?[reply]:[])]);
+  }
+  return turns.reverse().flat();
+}
+
 const compactTokens=new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1});
 const count=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
 
@@ -79,6 +100,26 @@ const fence=/^ {0,3}(`{3,}|~{3,})/;
 const heading=/^ {0,3}(#{1,6})\s+(.+)$/;
 const listItem=/^ {0,3}(?:([-+*])|(\d{1,9})[.)])\s+(.+)$/;
 
+export function chatAppSource(output){
+  if(output?.task!=='chat'||output.authorKind||typeof output.text!=='string'||output.finishReason==='length')return null;
+  const source=output.text.trim();
+  const document=/^(?:<!doctype\s+html\s*>\s*)?<html\b[\s\S]*<\/html\s*>$/i;
+  if(document.test(source))return source;
+  const lines=source.split(/\r\n?|\n/);
+  for(let i=0;i<lines.length;i++){
+    const marker=lines[i].match(fence)?.[1];
+    if(!marker)continue;
+    const language=lines[i].trim().slice(marker.length).trim().toLowerCase();
+    const start=i+1,closing=new RegExp('^ {0,3}'+marker[0]+'{'+marker.length+',}\\s*$');
+    while(++i<lines.length&&!closing.test(lines[i])){}
+    if(i===lines.length)break;
+    if(language&&language!=='html')continue;
+    const candidate=lines.slice(start,i).join('\n').trim();
+    if(document.test(candidate))return candidate;
+  }
+  return null;
+}
+
 export function chatMarkdown(text){
   const lines=String(text??'').replace(/\r\n?/g,'\n').split('\n');
   const blocks=[];
@@ -143,13 +184,15 @@ export function chatMarkdown(text){
 export function chatDetails(out,part='all'){
   const reasoning=out.reasoning?`<details class="thinking-panel" data-chat-panel data-reasoning><summary>✦ Thinking <span>Model-provided reasoning</span></summary><div class="output-text">${esc(out.reasoning)}</div></details>`:'';
   const search=out.webSearch;
-  const sources=search?`<details class="chat-sources" data-chat-panel><summary>◎ Web sources · ${search.sources.length}</summary><p class="help">${esc(search.provider==='brave'?'Brave Search':'DuckDuckGo')} · ${esc(search.query)} · ${esc(new Date(search.searchedAt).toLocaleString())}</p><ol>${search.sources.map(s=>{
+  const queries=search?.queries?.length?search.queries.join(' → '):search?.query;
+  const sources=search?`<details class="chat-sources" data-chat-panel><summary>◎ Web sources · ${search.sources.length}</summary><p class="help">${esc(search.provider==='public-page'?'Public page':search.provider==='publisher-news'?'Publisher feeds':search.provider==='brave'?'Brave Search':'DuckDuckGo')} · ${esc(queries)} · ${esc(new Date(search.searchedAt).toLocaleString())}</p><ol>${search.sources.map(s=>{
     let url;try{url=new URL(s.url);if(!['https:','http:'].includes(url.protocol))return '';}catch{return '';}
     const forecast=s.forecast;
     const excerpt=forecast?`<p><strong>NWS forecast for ${esc(forecast.location)}</strong> · Issued ${esc(new Date(forecast.issuedAt).toLocaleString())} (your time)</p><ul>${forecast.periods.map(period=>`<li><strong>${esc(period.name)}</strong> · ${esc(period.detail)}</li>`).join('')}</ul>`:`<p>${esc(s.snippet)}</p>`;
-    return `<li><a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(s.title || url.hostname)} ↗</a>${excerpt}</li>`;
+    const published=s.publishedAt?`<p class="help">${esc(s.publisher)} · Published ${esc(new Date(s.publishedAt).toLocaleString())}</p>`:'';
+    return `<li><a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(s.title || url.hostname)} ↗</a>${published}${s.excerpt?`<p class="help">Page excerpt</p><p>${esc(s.excerpt)}</p>`:excerpt}</li>`;
   }).join('')}</ol></details>`:'';
-  const searchWarning=out.webSearchWarning?`<p class="notice"><strong>Tiiny reply without web sources.</strong> ${esc(out.webSearchWarning)}</p>`:'';
+  const searchWarning=out.webSearchWarning?`<p class="notice"><strong>Tiiny reply without web sources.</strong> ${esc(out.webSearchWarning)}</p>`:search?.coverage==='partial'?'<p class="notice">The web sources only answer part of this request.</p>':'';
   const limit=Number.isSafeInteger(out.responseLimit)&&out.responseLimit>0?out.responseLimit:null;
   const advice=!out.text&&out.reasoning?'Thinking used the available budget before an answer arrived. Choose a larger <strong>Maximum response tokens</strong> value and resend your prompt. Lower reasoning effort or turn thinking off if your model supports it.':'Choose a larger <strong>Maximum response tokens</strong> value, then ask the model to continue. Thinking can share the output budget.';
   const warning=out.finishReason==='length'?`<p class="notice">${limit?'The response reached its requested '+limit.toLocaleString()+'-token limit.':out.responseLimit===null?'Tiiny stopped this response at a runtime output or context limit. Spindle did not set a token cap.':'The runtime stopped this response at a token or context limit.'} ${advice} The model’s context window and firmware still apply.</p>`:'';
