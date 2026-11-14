@@ -1,7 +1,7 @@
 import {mountDashboard,stopDashboard,refreshDashboard} from './dashboard.js';
 import {transcriptionFile} from './audio.js';
 import {guides,essentials,workflowTips,workspaceTips,recovery,workflowWarnings,voiceCloneModel,voiceReferenceSample} from './guidance.mjs';
-import {chatAppSource,chatDetails,chatMarkdown,chatReply,chatRunStats,isChatRun,restoreChat} from './chat-ui.mjs';
+import {chatAppSource,chatDetails,chatMarkdown,chatReply,chatRunStats,isChatRun,restoreChat,updateLiveChat} from './chat-ui.mjs';
 import {chatAttachmentText,maxTextBytes,maxTextFiles,pasteThreshold,readTextAttachments,validateTextAttachments} from './chat-attachments.mjs';
 import {downloadArtifact} from './artifact-download.mjs';
 import {meshPreviewHTML,installMeshPreviews} from './mesh-preview.mjs';
@@ -52,7 +52,7 @@ function copyButton(value,kind){
   return `<button type="button" class="button quiet copy-button" data-copy-text="${esc(JSON.stringify(value))}" data-copy-kind="${esc(kind)}">Copy ${esc(kind)}</button>`;
 }
 async function copyText(value,kind){
-  if(!value?.trim())return;
+  if(!value||(kind!=='block'&&!value.trim()))return;
   try{
     await navigator.clipboard.writeText(value);
     toast(kind[0].toUpperCase()+kind.slice(1)+' copied.');
@@ -685,27 +685,63 @@ function outputHTML(out,{partial=false}={}) {
   const museum=out.assets?.find(a=>a.mime==='text/html');
   if(museum)return `<div class="output-block"><div class="output-meta">YOUR OFFLINE MUSEUM</div><p>${esc(out.text)}</p>${out.appAuthor==='tiiny'?'<p class="help">Application code authored by your Tiiny. Data capture, testing and packaging by Spindle.</p>':''}<div class="actions section-gap"><a class="button primary" href="${esc(museum.previewUrl)}" target="_blank" rel="noopener noreferrer">Enter the 3D museum ↗</a><a class="button" href="${esc(museum.url)}" download="tiinyverse-museum.html">Download self-contained HTML</a>${(out.assets || []).filter(a=>a!==museum).map(a=>'<a class="button" href="'+esc(a.url)+'" download>'+esc(a.label || 'Download source')+' ↗</a>').join('')}</div><p class="help">WASD / arrows to walk, drag to look, E to inspect. Includes a readable collection view.</p></div>`;
   const json=structured?JSON.stringify(out.json,null,2):null;
-  const copy=out.assets?.length?'':copyButton(json??out.text,structured?'JSON':out.task==='chat'?'reply':'result');
-  return `<div class="output-block"><div class="output-meta">${esc(state?.tasks[out.task]?.label || out.task || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'before'):''}${structured || (out.text?(out.task==='chat'&&!partial?chatMarkdown(out.text):`<div class="output-text">${esc(out.text)}</div>`):'')}${out.task==='chat'?chatDetails(out,'sources'):''}${copy}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(json)}</pre></details>`:''}</div>`;
+  const liveChat=out.task==='chat'&&partial;
+  const body=liveChat?'<div data-chat-live-details></div><div class="output-text chat-markdown" data-chat-live></div><div data-chat-live-sources></div>':out.text?(out.task==='chat'?chatMarkdown(out.text):`<div class="output-text">${esc(out.text)}</div>`):'';
+  const copy=out.assets?.length||liveChat?'':copyButton(json??out.text,structured?'JSON':out.task==='chat'?'reply':'result');
+  return `<div class="output-block"><div class="output-meta">${esc(state?.tasks[out.task]?.label || out.task || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'before'):''}${structured || body}${out.task==='chat'?chatDetails(out,'sources'):''}${copy}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(json)}</pre></details>`:''}</div>`;
 }
 function renderCurrent(j){
   if(!$('#output'))return;disableSend($('#task-form'),['queued','running'].includes(j.status));$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
   renderChatStats(j);
   let completedAnswer=false;const conversation=$('#conversation'),follow=conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
   $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.id===chatRunId&&j.status==='completed';
-  const thinkingOpen=[...$('#output').querySelectorAll('[data-chat-panel]')].map(el=>el.open);$('#output').innerHTML=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+(j.partial?outputHTML(j.partial,{partial:true}):'')+(j.error?recoveryHTML(j.error,j.audioFailure):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
-  $('#output').querySelectorAll('[data-chat-panel]').forEach((el,i)=>el.open=thinkingOpen[i] || false);
-  bind('#stop-current','click',()=>api('/api/cancel/'+j.id,{}).then(()=>toast('Stop requested.')).catch(fail));
+  const output=$('#output');
+  const livePartial=j.partial?.task==='chat';
+  const partial=livePartial?outputHTML({task:'chat',model:j.partial.model},{partial:true}):j.partial?outputHTML(j.partial,{partial:true}):'';
+  const shell=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+partial+(j.error?recoveryHTML(j.error,j.audioFailure):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
+  const previous=liveOutputShells.get(output);
+  const hasLiveReply=previous?.id===j.id&&!!output.querySelector('[data-chat-live]')?.childElementCount;
+  if(previous?.id!==j.id||previous.html!==shell){
+    const thinkingOpen=previous?.id===j.id?[...output.querySelectorAll('[data-chat-panel]')].map(el=>el.open):[];
+    output.innerHTML=shell;
+    liveOutputShells.set(output,{id:j.id,html:shell,thinkingOpen});
+    output.querySelectorAll('[data-chat-panel]').forEach((el,i)=>el.open=thinkingOpen[i]||false);
+    bind('#stop-current','click',()=>api('/api/cancel/'+j.id,{}).then(()=>toast('Stop requested.')).catch(fail));
+  }
+  const live=output.querySelector('[data-chat-live]');
+  if(live){
+    updateLiveChat(live,j.partial.text);
+    const details=output.querySelector('[data-chat-live-details]');
+    const markup=chatDetails(j.partial,'before');
+    const current=liveOutputShells.get(output);
+    if(current.details!==markup){
+      const open=details.querySelector('[data-reasoning]')?.open??current.thinkingOpen[0]??false;
+      details.innerHTML=markup;
+      const reasoning=details.querySelector('[data-reasoning]');
+      if(reasoning)reasoning.open=open;
+      current.details=markup;
+    }
+    const sources=output.querySelector('[data-chat-live-sources]');
+    const sourceMarkup=chatDetails(j.partial,'sources');
+    if(current.sources!==sourceMarkup){
+      const open=sources.querySelector('details')?.open;
+      sources.innerHTML=sourceMarkup;
+      const sourcePanel=sources.querySelector('details');
+      if(sourcePanel)sourcePanel.open=!!open;
+      current.sources=sourceMarkup;
+    }
+  }
   if(j.status==='completed'){
     const out=j.outputs.at(-1);
     if(task==='chat'&&j.id===chatRunId&&!chat.some(message=>message.runId===j.id)){
       const reply=chatReply(j);
       if(reply){chat.push(reply);renderChat();chatOptionsStatus();completedAnswer=true;}
     }
-    if(out?.assets?.some(a=>a.mime.startsWith('image/'))){const btn=document.createElement('button');btn.className='button';btn.textContent='Animate this image →';btn.onclick=()=>makeImageVideo(j);$('#output').append(btn);}
+    if(out?.assets?.some(a=>a.mime.startsWith('image/'))&&!output.querySelector('[data-animate-current]')){const btn=document.createElement('button');btn.className='button';btn.dataset.animateCurrent='';btn.textContent='Animate this image →';btn.onclick=()=>makeImageVideo(j);output.append(btn);}
   }
-  if(follow){if(completedAnswer)(task==='chat'?$('#chat-history').lastElementChild:$('#workspace-result'))?.scrollIntoView({block:'start'});else scrollConversation();}
+  if(follow){if(completedAnswer&&!hasLiveReply)$('#chat-history').lastElementChild?.scrollIntoView({block:'start'});else scrollConversation();}
 }
+const liveOutputShells=new WeakMap();
 function makeImageVideo(j){
   const image=j.outputs.filter(o=>o.task==='image').flatMap(o=>o.assets || []).find(a=>a.mime.startsWith('image/'));
   if(!image)return;studio.adopt(image);page='workflows';show();$('#creative-workflow').open=true;toast('Your saved image is selected. Refine it or make a video.');
@@ -1007,6 +1043,15 @@ function openGuide(tabName){
   dialog.scrollTop=0;
 }
 document.addEventListener('click',async e=>{
+  const jump=e.target.closest('[data-chat-jump]');
+  if(jump){
+    const heading=jump.closest('.chat-markdown').querySelector(`[data-chat-heading="${jump.dataset.chatJump}"]`);
+    heading?.focus({preventScroll:true});
+    heading?.scrollIntoView({block:'start'});
+    return;
+  }
+  const code=e.target.closest('[data-copy-code]');
+  if(code){await copyText(code.closest('.chat-code').querySelector('code').textContent,'block');return;}
   const attachment=e.target.closest('[data-download-text]');
   if(attachment){
     downloadArtifact(attachment.dataset.downloadText,attachment.closest('details').querySelector('code').textContent);

@@ -166,8 +166,51 @@ async function smokeBrowser(profile){
     await fit('Meeting Desk with draft at 390px');
     await navigate('workbench');await navigate('meeting');await waitForElement('#meeting-draft-player');
     assert.equal(await evaluate(`${$('#meeting-download')}.download`),'Meeting sample.wav');
+    const runId='9c45ccb7-9c44-4196-89df-b2d2097b37f5';
+    const diagram='  '+('├── Ready → confirm pickup '.repeat(5));
+    const formatted=[
+      'SECTION A — Summary','══════','Keep **18 units** for pickup.','',
+      '| Item | Count |','|---|---:|','| Kit | 24 |','',
+      '```text',diagram,'```','',
+    ].join('\r\n');
+    const sections='SECTION B — Timing\n\nSaturday.\n\nSECTION C — Storage\n\nUse the shelf.\n\nSECTION D — Follow-up\n\nSend a note.';
+    await call('Page.enable');
+    await call('Page.addScriptToEvaluateOnNewDocument',{source:`{
+      const run={id:${JSON.stringify(runId)},name:'Synthetic chat reply',status:'running',keepChatModel:true,
+        startedAt:new Date().toISOString(),steps:[{task:'chat',promptMode:'literal',model:'demo/chat',prompt:'Summarize the pickup.'}],outputs:[]};
+      const initial=${JSON.stringify(formatted)},final=initial+'\\n'+${JSON.stringify(sections)};
+      localStorage.setItem('spindle-last-chat-run',run.id);
+      window.advanceSyntheticReply=phase=>{
+        if(phase===2){run.status='completed';run.outputs=[{task:'chat',model:'demo/chat',text:final}];delete run.partial;}
+        else run.partial={task:'chat',model:'demo/chat',text:phase?initial+'\\nSECTION B — Timing':initial,reasoning:'Synthetic reasoning '+phase};
+      };
+      window.advanceSyntheticReply(0);
+      const fetchFromServer=window.fetch.bind(window);
+      window.fetch=(url,...args)=>url==='/api/runs'?Promise.resolve(Response.json([run])):fetchFromServer(url,...args);
+    }`});
+    await call('Emulation.setDeviceMetricsOverride',{width:320,height:568,deviceScaleFactor:1,mobile:false});
+    await call('Page.reload',{ignoreCache:true});
+    await waitForElement('[data-chat-live] .chat-code').catch(async error=>{
+      const status=await evaluate(`({fixture:typeof window.advanceSyntheticReply,restored:!!document.querySelector('#chat-history .from-user'),status:document.querySelector('#output-status')?.textContent})`);
+      throw Error(`${error.message}: ${JSON.stringify(status)} ${errors.join(' ')}`);
+    });
+    await evaluate(`window.firstChatBlock=${$('[data-chat-live] h2')}; window.advanceSyntheticReply(1);`);
+    await waitFor('formatted streaming update',()=>evaluate(`document.querySelectorAll('[data-chat-live] h2').length===2`));
+    assert.ok(await evaluate(`window.firstChatBlock===${$('[data-chat-live] h2')}`),'Streaming replaced an unchanged heading');
+    await evaluate('window.advanceSyntheticReply(2)');
+    await waitForElement('#chat-history .chat-outline');
+    assert.equal(await evaluate(`getComputedStyle(${$('#chat-history .chat-markdown strong')}).display`),'inline');
+    assert.ok(await evaluate(`(()=>{const code=${$('#chat-history .chat-code pre')};return code.scrollWidth>code.clientWidth;})()`),'Wide code should scroll within the reply');
+    await fit('Formatted reply at 320px');
+    await click('#chat-history [data-chat-jump="3"]');
+    assert.match(await evaluate('document.activeElement.textContent'),/Follow-up/);
+    await evaluate(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.copiedReply=text;}}});`);
+    await click('#chat-history [data-copy-code]');
+    assert.equal(await evaluate('window.copiedReply'),diagram+'\r\n');
+    await click('#chat-history [data-copy-kind="reply"]');
+    assert.equal(await evaluate('window.copiedReply'),formatted+'\n'+sections);
     assert.deepEqual(errors,[],'Browser exceptions');
-    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, workspace navigation, device settings, dialogs, cost filters, and meeting draft import and retention.');
+    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, navigation, device settings, dialogs, cost filters, meeting drafts, and streaming chat formatting and copy.');
   }finally{
     if(ws?.readyState===WebSocket.OPEN)await closeBrowser?.().catch(()=>{});
     ws?.close();

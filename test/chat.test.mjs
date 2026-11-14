@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chatMessage,chatSampleSettings,chatSettings,readChatResponse,requestChatResponse} from '../chat.mjs';
-import {chatDetails,chatMarkdown,chatRunStats,restoreChat,withResponseLimit} from '../public/chat-ui.mjs';
+import {chatDetails,chatMarkdown,chatMarkdownBlocks,chatRunStats,restoreChat,withResponseLimit} from '../public/chat-ui.mjs';
 import {loadChatOptions,saveChatOptions,ampleResponseTokens} from '../public/chat-settings.mjs';
 import {createMetric} from '../metrics.mjs';
 
@@ -186,7 +186,38 @@ test('assistant replies format a forecast table, paragraphs, emphasis, and lists
 test('assistant Markdown leaves raw HTML and code inert and never embeds remote images',()=>{
   const html=chatMarkdown('<img src="https://example.com/html.png">\n[unsafe](javascript:bad)\n![caption](https://example.com/remote.png)\n\n```html\n<b>literal</b>\n```');
   assert.ok(html.includes('&lt;img'));
-  assert.ok(html.includes('<pre><code>&lt;b&gt;literal&lt;/b&gt;</code></pre>'));
+  assert.match(html,/<pre[^>]+><code>&lt;b&gt;literal&lt;\/b&gt;\n<\/code><\/pre>/);
   assert.ok(html.includes('caption'));
   assert.doesNotMatch(html,/<img|<a |remote\.png|javascript:/);
+});
+
+test('long replies outline section headings and preserve the exact contents of fenced blocks',()=>{
+  const text=[
+    'SECTION A — Overview','══════','**A.1** First line','continues here.','',
+    '| Item | Count |','|---|---:|','| Kit | 4 |','',
+    '══════','SECTION B — Details','══════','> A quoted note','',
+    '```python','  <b>literal</b>','SECTION C — inside code','══════','','```','',
+    '---','Outside the code.','',
+  ].join('\r\n');
+  const html=chatMarkdown(text);
+  assert.match(html,/<nav class="chat-outline"/);
+  assert.match(html,/<h2 data-chat-heading="0"[^>]*>Section A — Overview<\/h2>/);
+  assert.match(html,/<h2 data-chat-heading="1"[^>]*>Section B — Details<\/h2>/);
+  assert.equal((html.match(/data-chat-jump/g)||[]).length,2);
+  assert.match(html,/<strong>A\.1<\/strong> First line continues here\./);
+  assert.match(html,/<th scope="col" data-align="end">Count<\/th>/);
+  assert.match(html,/<blockquote>A quoted note<\/blockquote>/);
+  assert.match(html,/<code>  &lt;b&gt;literal&lt;\/b&gt;&#13;\nSECTION C — inside code&#13;\n══════&#13;\n&#13;\n<\/code>/);
+  assert.equal((html.match(/══════/g)||[]).length,1);
+  assert.equal((html.match(/<hr>/g)||[]).length,1);
+});
+
+test('streamed code becomes copyable once closed and untrusted labels cannot inject markup',()=>{
+  const text='## <img src=x onerror=alert(1)>\n\n```js" onclick="alert(1)\nalert(1)';
+  const live=chatMarkdownBlocks(text,{partial:true}).join('');
+  assert.match(live,/aria-label="Text block"/);
+  assert.match(live,/&lt;img/);
+  assert.doesNotMatch(live,/<img|data-copy-code| onclick="/);
+  assert.match(chatMarkdownBlocks(text+'\n```',{partial:true}).join(''),/data-copy-code/);
+  assert.match(chatMarkdown(text),/data-copy-code/);
 });

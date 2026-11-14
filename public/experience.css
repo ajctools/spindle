@@ -91,10 +91,10 @@ select option{background:#161c2b;color:var(--text)}
 .creation-composer #example-undo:not(:empty){display:flex;flex-wrap:wrap;gap:5px;padding:0 4px 10px}
 .creation-workspace .chat-history{gap:26px;margin:0}
 .creation-workspace .chat-message{border:0;padding:0;max-height:none;overflow:visible;white-space:normal;min-width:0}
-.creation-workspace .chat-message strong{font-size:11px;font-weight:500;letter-spacing:.2px;margin-bottom:8px}
+.creation-workspace .chat-message>strong{font-size:11px;font-weight:500;letter-spacing:.2px;margin-bottom:8px}
 .creation-workspace .chat-message .output-text{font-size:15px;line-height:1.8}
 .creation-workspace .chat-message.from-user{align-self:flex-end;max-width:88%;padding:12px 18px;border:1px solid #a4b2cb12;border-radius:20px 20px 5px 20px;background:#242c3e}
-.creation-workspace .chat-message.from-user strong{display:none}
+.creation-workspace .chat-message.from-user>strong{display:none}
 .creation-workspace .chat-message.from-assistant{padding:0 4px}
 .workspace-result{padding:18px 4px 0}
 .workspace-result .result-status{font-size:11px;color:var(--muted);margin-bottom:12px}

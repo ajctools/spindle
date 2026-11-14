@@ -93,12 +93,18 @@ function tableCells(line){
 
 function tableHeader(line,nextLine){
   const headers=tableCells(line),dividers=tableCells(nextLine);
-  return headers&&dividers?.length===headers.length&&dividers.every(cell=>/^:?-{3,}:?$/.test(cell))?headers:null;
+  return headers&&dividers?.length===headers.length&&dividers.every(cell=>/^:?-{3,}:?$/.test(cell))?{headers,dividers}:null;
 }
 
 const fence=/^ {0,3}(`{3,}|~{3,})/;
 const heading=/^ {0,3}(#{1,6})\s+(.+)$/;
 const listItem=/^ {0,3}(?:([-+*])|(\d{1,9})[.)])\s+(.+)$/;
+const sectionTitle=/^\s*SECTION ([A-Z]|\d{1,3})\s+[—–-]\s+(.+?)\s*$/i;
+const boxRule=/^\s*[═─]{4,}\s*$/;
+const markdownRule=/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+const quote=/^ {0,3}>[ \t]?/;
+const startsBlock=(line,next)=>fence.test(line)||heading.test(line)||sectionTitle.test(line)||boxRule.test(line)||
+  markdownRule.test(line)||quote.test(line)||listItem.test(line)||tableHeader(line,next);
 
 export function chatAppSource(output){
   if(output?.task!=='chat'||output.authorKind||typeof output.text!=='string'||output.finishReason==='length')return null;
@@ -120,9 +126,11 @@ export function chatAppSource(output){
   return null;
 }
 
-export function chatMarkdown(text){
-  const lines=String(text??'').replace(/\r\n?/g,'\n').split('\n');
-  const blocks=[];
+export function chatMarkdownBlocks(text,{partial=false}={}){
+  // Keep the original line endings available for copying fenced text.
+  const source=String(text??'');
+  const lines=source.split(/\r\n?|\n/),endings=source.match(/\r\n?|\n/g)??[];
+  const blocks=[],titles=[];
   for(let i=0;i<lines.length;){
     const line=lines[i];
     if(!line.trim()){i++;continue;}
@@ -130,31 +138,51 @@ export function chatMarkdown(text){
     if(openingFence){
       const marker=openingFence[1];
       const closing=new RegExp('^ {0,3}'+marker[0]+'{'+marker.length+',}\\s*$');
-      const code=[];
-      for(i++;i<lines.length&&!closing.test(lines[i]);i++)code.push(lines[i]);
-      if(i<lines.length)i++;
-      blocks.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+      const language=line.trimStart().slice(marker.length).trim().match(/^[\w#+.-]{1,24}(?=\s|$)/)?.[0]??'Text';
+      const start=++i;
+      while(i<lines.length&&!closing.test(lines[i]))i++;
+      const closed=i<lines.length;
+      const code=lines.slice(start,i).map((part,index)=>part+(endings[start+index]??'')).join('');
+      if(closed)i++;
+      const copy=code.length&&(closed||!partial)?'<button class="button quiet copy-button" type="button" data-copy-code>Copy block</button>':'';
+      blocks.push(`<figure class="chat-code"><figcaption>${esc(language)}${copy}</figcaption><pre tabindex="0" aria-label="${esc(language)} block"><code>${esc(code).replaceAll('\r','&#13;')}</code></pre></figure>`);
       continue;
     }
-    const headers=tableHeader(line,lines[i+1]);
-    if(headers){
+    const table=tableHeader(line,lines[i+1]);
+    if(table){
+      const {headers,dividers}=table;
+      const alignment=dividers.map(divider=>divider.endsWith(':')?(divider.startsWith(':')?' data-align="center"':' data-align="end"'):'');
       i+=2;
       const rows=[];
       while(i<lines.length){
         const cells=tableCells(lines[i]);
-        if(!cells||cells.length!==headers.length)break;
-        rows.push('<tr>'+cells.map(cell=>`<td>${inline(cell)}</td>`).join('')+'</tr>');
+        if(!cells||cells.length!==headers.length||fence.test(lines[i])||heading.test(lines[i])||sectionTitle.test(lines[i]))break;
+        rows.push('<tr>'+cells.map((cell,column)=>`<td${alignment[column]}>${inline(cell)}</td>`).join('')+'</tr>');
         i++;
       }
-      const head=headers.map(cell=>`<th scope="col">${inline(cell)}</th>`).join('');
+      const head=headers.map((cell,column)=>`<th scope="col"${alignment[column]}>${inline(cell)}</th>`).join('');
       blocks.push(`<div class="chat-table-scroll" tabindex="0" role="region" aria-label="Reply table"><table><thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`);
       continue;
     }
-    const title=line.match(heading);
-    if(title){
-      const level=Math.max(2,title[1].length);
-      blocks.push(`<h${level}>${inline(title[2])}</h${level}>`);
+    const title=line.match(heading),section=line.match(sectionTitle);
+    if(section||title){
+      const level=section?2:Math.max(2,title[1].length);
+      const caption=section?`Section ${section[1].toUpperCase()} — ${section[2]}`:title[2];
+      const label=section?`${section[1].toUpperCase()} · ${section[2]}`:caption;
+      const target=level===2?` data-chat-heading="${titles.push(label)-1}" tabindex="-1"`:'';
+      blocks.push(`<h${level}${target}>${inline(caption)}</h${level}>`);
       i++;
+      continue;
+    }
+    if(boxRule.test(line)||markdownRule.test(line)){
+      if(!boxRule.test(line)||!sectionTitle.test(lines[i-1]??'')&&!sectionTitle.test(lines[i+1]??''))blocks.push('<hr>');
+      i++;
+      continue;
+    }
+    if(quote.test(line)){
+      const quoted=[];
+      while(i<lines.length&&quote.test(lines[i]))quoted.push(inline(lines[i++].replace(quote,'')));
+      blocks.push(`<blockquote>${quoted.join('<br>')}</blockquote>`);
       continue;
     }
     const item=line.match(listItem);
@@ -173,12 +201,37 @@ export function chatMarkdown(text){
     }
     const paragraph=[line];
     for(i++;i<lines.length&&lines[i].trim();i++){
-      if(fence.test(lines[i])||heading.test(lines[i])||listItem.test(lines[i])||tableHeader(lines[i],lines[i+1]))break;
+      if(startsBlock(lines[i],lines[i+1]))break;
       paragraph.push(lines[i]);
     }
-    blocks.push('<p>'+paragraph.map(inlineLine=>inline(inlineLine)).join('<br>')+'</p>');
+    blocks.push('<p>'+paragraph.map((part,index)=>{
+      const hardBreak=index<paragraph.length-1&&/(?: {2,}|\\)$/.test(part);
+      const line=part.trim();
+      return inline(hardBreak?line.replace(/\\$/,''):line)+(hardBreak?'<br>':index<paragraph.length-1?' ':'');
+    }).join('')+'</p>');
   }
-  return `<div class="output-text chat-markdown">${blocks.join('')}</div>`;
+  if(!partial&&(titles.length>=4||titles.length>=2&&blocks.length>=8)){
+    const links=titles.map((label,index)=>`<button type="button" data-chat-jump="${index}">${inline(label,0,false)}</button>`).join('');
+    blocks.unshift(`<nav class="chat-outline" aria-label="In this reply"><span>In this reply</span>${links}</nav>`);
+  }
+  return blocks;
+}
+
+export function chatMarkdown(text){
+  return `<div class="output-text chat-markdown">${chatMarkdownBlocks(text).join('')}</div>`;
+}
+
+const liveReplies=new WeakMap();
+
+export function updateLiveChat(container,text){
+  const previous=liveReplies.get(container);
+  if(previous?.text===text)return;
+  const blocks=chatMarkdownBlocks(text,{partial:true}),oldBlocks=previous?.blocks??[];
+  let shared=0;
+  while(shared<oldBlocks.length&&oldBlocks[shared]===blocks[shared])shared++;
+  while(container.children.length>shared)container.lastElementChild.remove();
+  container.insertAdjacentHTML('beforeend',blocks.slice(shared).join(''));
+  liveReplies.set(container,{text,blocks});
 }
 
 export function chatDetails(out,part='all'){
