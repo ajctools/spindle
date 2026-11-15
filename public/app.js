@@ -149,6 +149,7 @@ function show(){
   if(page!=='library')librarySelection='';
   stopDashboard();
   closeNavigation();
+  setFocusAvailable(page==='workbench'&&task==='chat'&&!!state);
   document.body.classList.toggle('creating',page==='workbench');
   window.dispatchEvent(new Event('spindle:workspace'));
   if(page==='connection'){connectionPage();return;}
@@ -337,6 +338,9 @@ function extraFields(){
 }
 function workbench(){
   const isChat=task==='chat',fileOnly=['asr','ocr','mesh'].includes(task),label=state.tasks[task].label;
+  setFocusAvailable(isChat);
+  setFocusReading(document.body.classList.contains('focus-mode'));
+  setFocusWriting(false);
   let textAttachments=[],readingAttachments=false,pasteCount=0,renderAttachments;
   if(isChat&&chatRunId)currentJob=chatRunId;
   if(isChat)selectedModel=preferredChatModel();
@@ -345,7 +349,7 @@ function workbench(){
   const titles={chat:'What’s on your mind?',image:'Picture something new.',asr:'Make every word useful.',speech:'Give your words a voice.',music:'Find your next sound.',video:'Set your ideas in motion.',ocr:'A clearer view of your documents.',mesh:'Give an image a new dimension.',decision:'Find the right direction.',embed:'Find meaning in your text.',rerank:'Bring the best match forward.'};
   const action=isChat?'Send':({image:'Create image',asr:'Transcribe',speech:'Create speech',music:'Create music',video:'Create video',ocr:'Read document',mesh:'Create 3D object',decision:'Evaluate',embed:'Create embeddings',rerank:'Rank documents'})[task];
   $('#view').innerHTML=`<section class="creation-workspace${isChat?' chat-workspace':''}" aria-label="${esc(label)} workspace">
-    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
+    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" id="enter-focus">Focus</button><button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
     <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,4).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
     <div id="chat-history" class="chat-history" role="log" aria-label="Conversation"></div>
     <section class="workspace-result" id="workspace-result" aria-label="Result" hidden><div class="result-status"><span id="output-status" role="status">Ready</span></div><div class="output-area" id="output" aria-live="polite"></div></section></div>
@@ -354,6 +358,7 @@ function workbench(){
       <span class="chat-context"><span data-chat-context>Context —</span><progress aria-label="Context window used" max="100" hidden></progress><span data-chat-percent></span></span>
       <span data-chat-rate></span><span data-chat-cache></span>
     </section>`:''}
+    ${isChat?'<div class="focus-compose-actions"><button class="button quiet" id="focus-compose" type="button" aria-expanded="false" aria-controls="task-form">Write</button></div>':''}
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
     <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog"><span class="chat-wide-label">Attach from </span>Vault</button>':''}</div>
     ${isChat?'<input id="chat-text-files" type="file" multiple hidden><ul id="chat-text-attachments" aria-label="Attached text files" hidden></ul><div id="chat-attachment-status" class="sr-only" role="status"></div>':''}
@@ -363,6 +368,7 @@ function workbench(){
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
     <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit" aria-label="Send to Tiiny only"><span class="chat-wide-label">Send to </span>Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
     ${isChat?'<p id="chat-search-notice" class="chat-search-notice" role="note"></p>':''}
+    ${isChat?'<div class="focus-run-bar"><span class="small muted" data-focus-run-status role="status"></span><button class="button danger" id="focus-stop" type="button" hidden>Stop run</button></div>':''}
     <details id="${isChat?'chat':'creation'}-options" class="chat-options"><summary><span>${isChat?'Chat':esc(label)} options</span><span class="small muted">${isChat?'Search, thinking & more':'Fine-tune your result'}</span></summary><div class="chat-options-body"><div class="model-note" id="model-note"></div><button class="text-button model-help" type="button" data-guide="essentials">About this model →</button>
     ${isChat?`<label class="field"><span>Default chat model</span><select id="default-chat-model"><option value="">No default</option>${compatible('chat',true).map(m=>`<option value="${esc(m.id)}" ${m.id===state.defaultChatModel?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label><p class="help" id="default-chat-status" role="status">Loads when Chat opens on an idle, empty device.</p>`:''}
     ${isChat||!fileOnly&&task!=='rerank'?extraFields():''}
@@ -372,6 +378,9 @@ function workbench(){
   const vault=hasVault?vaultAttachment.bindVaultAttachment({api,dialog:$('#vault-dialog'),open:$('#attach-vault'),attached:$('#vault-attached'),onChange:chatOptionsStatus}):null;
   $('#breadcrumb').textContent='Chat & create';
   bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=preferred(task);currentJob=null;workbench();});
+  bind('#enter-focus','click',()=>setFocusMode(true,true));
+  bind('#focus-compose','click',()=>setFocusWriting(!document.body.classList.contains('focus-writing'),true));
+  bind('#focus-stop','click',()=>$('#stop-current')?.click());
   bind('#prompt','input',resizePrompt);
   bind('#copy-draft','click',()=>copyText($('#prompt').value,'prompt'));
   bind('#attach-image','click',()=>$('#input-file').click());
@@ -457,6 +466,10 @@ function workbench(){
       if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
       currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
       if(chatStep){
+        if(document.body.classList.contains('focus-mode')){
+          setFocusWriting(false);
+          setFocusReading(true);
+        }
         if(vaultReference&&vault?.reference===vaultReference)vault.clear();
         if(prompt.value===input)prompt.value='';
         textAttachments=textAttachments.filter(file=>!attachments.includes(file));
@@ -464,7 +477,13 @@ function workbench(){
         resizePrompt();
       }
       if(fileOnly){const inputBox=$('.input-disclosure');if(inputBox){inputBox.open=false;inputBox.querySelector('summary').textContent='Input · '+($('#input-file')?.files[0]?.name || sampleInput?.name || 'Selected file');}}renderChat();renderCurrent(runs.find(run=>run.id===j.id)??j);scrollConversation();poll();
-    }catch(e){disableSend(form,false);if(form===$('#task-form'))fail(e);else toast(e.message);}
+    }catch(e){
+      disableSend(form,false);
+      if(form===$('#task-form')){
+        if(isChat&&document.body.classList.contains('focus-mode'))setFocusWriting(true);
+        fail(e);
+      }else toast(e.message);
+    }
   });
   const checkModel=async speechMode=>{
     const form=$('#task-form');
@@ -487,7 +506,18 @@ function workbench(){
   if(currentJob){const j=runs.find(r=>r.id===currentJob);if(j)renderCurrent(j);}
   if(isChat)void warmDefaultChat();
 }
-function disableSend(form,disabled){form?.querySelectorAll('button[type="submit"]').forEach(button=>{button.disabled=disabled;});}
+function disableSend(form,disabled){
+  if(!form)return;
+  const runBar=form.querySelector('.focus-run-bar');
+  if(runBar){
+    if(disabled&&!form.classList.contains('run-pending')){
+      runBar.querySelector('[data-focus-run-status]').textContent='Submitting…';
+      runBar.querySelector('#focus-stop').hidden=true;
+    }
+    form.classList.toggle('run-pending',disabled);
+  }
+  form.querySelectorAll('button[type="submit"]').forEach(button=>{button.disabled=disabled;});
+}
 async function warmDefaultChat(){
   const id=state.defaultChatModel;
   if(!id||selectedModel!==id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
@@ -587,6 +617,51 @@ function resizePrompt(){
   $('#copy-draft').disabled=!prompt.value.trim();
 }
 function scrollConversation(){const el=$('#conversation');if(el)el.scrollTop=el.scrollHeight;}
+function followsLatest(conversation){
+  return conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
+}
+function setFocusAvailable(available){
+  $('#mobile-wordmark').disabled=!available;
+  const wordmark=$('#desktop-wordmark');
+  if(available){
+    wordmark.title='Double-click to enter Focus';
+    wordmark.setAttribute('role','button');
+    wordmark.setAttribute('aria-label','Enter Focus');
+  }else{
+    wordmark.removeAttribute('title');
+    wordmark.removeAttribute('role');
+    wordmark.removeAttribute('aria-label');
+    setFocusMode(false);
+  }
+}
+function setFocusMode(active,moveFocus=false){
+  if(active&&!$('.chat-workspace'))return;
+  if(document.body.classList.contains('focus-mode')===active)return;
+  const conversation=$('#conversation'),follow=followsLatest(conversation);
+  document.body.classList.toggle('focus-mode',active);
+  setFocusReading(active);
+  if(!active)setFocusWriting(false);
+  if(!active&&follow)scrollConversation();
+  if(moveFocus)$(active?'#exit-focus':'#enter-focus')?.focus({preventScroll:true});
+}
+function setFocusReading(reading){
+  const changed=document.body.classList.contains('focus-reading')!==reading;
+  document.body.classList.toggle('focus-reading',reading);
+  $('#focus-chat')?.setAttribute('aria-pressed',String(!reading));
+  $('#focus-read')?.setAttribute('aria-pressed',String(reading));
+  if(changed&&$('#conversation'))$('#conversation').scrollTop=0;
+}
+function setFocusWriting(writing,moveFocus=false){
+  const conversation=$('#conversation'),follow=followsLatest(conversation);
+  document.body.classList.toggle('focus-writing',writing);
+  const toggle=$('#focus-compose');
+  if(toggle){
+    toggle.textContent=writing?'Hide composer':'Write';
+    toggle.setAttribute('aria-expanded',String(writing));
+  }
+  if(follow)scrollConversation();
+  if(moveFocus)$(writing?'#prompt':'#focus-compose')?.focus({preventScroll:true});
+}
 function textAttachmentDetails(files=[]){
   return files.map(({name,text})=>`<details class="chat-text-detail"><summary>${esc(name)}</summary><pre><code>${esc(text).replaceAll('\r','&#13;')}</code></pre><button class="button quiet" type="button" data-download-text="${esc(name)}">Download text</button></details>`).join('');
 }
@@ -691,9 +766,18 @@ function outputHTML(out,{partial=false}={}) {
   return `<div class="output-block"><div class="output-meta">${esc(state?.tasks[out.task]?.label || out.task || '')} ${out.model?' / '+esc(out.model):''}</div>${(out.assets || []).map(a=>a.mime.startsWith('image/')?`<div class="image-result"><img src="${esc(a.url)}" alt="Generated image"></div><a class="download-link" href="${esc(a.url)}" download>Save image ↗</a>`:a.mime.startsWith('audio/')?`<div class="audio-result"><span class="audio-glyph">≋</span><div><span class="small muted">YOUR SOUND, MADE LOCAL</span><audio controls src="${esc(a.url)}"></audio></div></div><a class="download-link" href="${esc(a.url)}" download>Save audio ↗</a>`:a.mime.startsWith('video/')?`<video controls src="${esc(a.url)}"></video><a class="download-link" href="${esc(a.url)}" download>Save video ↗</a><button class="button quiet" type="button" data-soundtrack="${esc(a.url)}">Repair soundtrack →</button>`:`${meshPreviewHTML(a)}<div class="mesh-result"><span>⬡</span><p>${esc(a.label || '3D artifact')}</p><a class="button primary" href="${esc(a.url)}" download="${esc(a.label || 'artifact')}">Download artifact ↗</a></div>`).join('')}${out.task==='chat'?chatDetails(out,'before'):''}${structured || body}${out.task==='chat'?chatDetails(out,'sources'):''}${copy}${structured?`<details class="section-gap"><summary>Full structured response</summary><pre>${esc(json)}</pre></details>`:''}</div>`;
 }
 function renderCurrent(j){
-  if(!$('#output'))return;disableSend($('#task-form'),['queued','running'].includes(j.status));$('#output-status').textContent=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
+  if(!$('#output'))return;
+  const follow=followsLatest($('#conversation')),pending=['queued','running'].includes(j.status);
+  const status=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
+  disableSend($('#task-form'),pending);
+  $('#output-status').textContent=status;
+  const focusStatus=$('[data-focus-run-status]');
+  if(pending&&focusStatus){
+    if(focusStatus.textContent!==status)focusStatus.textContent=status;
+    $('#focus-stop').hidden=false;
+  }
   renderChatStats(j);
-  let completedAnswer=false;const conversation=$('#conversation'),follow=conversation&&conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<100;
+  let completedAnswer=false;
   $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.id===chatRunId&&j.status==='completed';
   const output=$('#output');
   const livePartial=j.partial?.task==='chat';
@@ -1100,6 +1184,34 @@ document.addEventListener('click',async e=>{
   const action=e.target.closest('[data-recovery]');if(action){if(action.dataset.recovery==='guide')openGuide();else{page=action.dataset.recovery;show();}}
 });
 bind('#open-guide','click',()=>openGuide());$('#open-guide').disabled=false;
+
+bind('#desktop-wordmark','click',e=>{
+  if(e.currentTarget.getAttribute('role')!=='button'||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey)return;
+  e.preventDefault();
+  if(e.detail===0||e.detail===2)setFocusMode(true,true);
+});
+bind('#desktop-wordmark','keydown',e=>{
+  if(e.key!==' '||e.currentTarget.getAttribute('role')!=='button')return;
+  e.preventDefault();
+  setFocusMode(true,true);
+});
+bind('#mobile-wordmark','click',()=>setFocusMode(true,true));
+bind('#exit-focus','click',()=>setFocusMode(false,true));
+bind('#focus-chat','click',()=>{
+  setFocusReading(false);
+  scrollConversation();
+});
+bind('#focus-read','click',()=>{
+  setFocusWriting(false);
+  setFocusReading(true);
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&!e.isComposing&&!e.defaultPrevented&&document.body.classList.contains('focus-mode')&&
+    !$('dialog[open]')&&$('#chat-app-preview').hidden){
+    e.preventDefault();
+    setFocusMode(false,true);
+  }
+});
 
 function closeNavigation(){if($('#navigation-dialog').open)$('#navigation-dialog').close();}
 bind('#open-navigation','click',()=>{const slot=$('#mobile-navigation');slot.innerHTML='<nav aria-label="Main navigation">'+$('#nav').innerHTML+'</nav><p class="mobile-connection">'+esc($('#connection').textContent)+'</p>';slot.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{page=b.dataset.page;librarySelection='';show();});$('#navigation-dialog').showModal();});

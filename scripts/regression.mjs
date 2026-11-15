@@ -120,6 +120,7 @@ async function smokeBrowser(profile){
     const $=selector=>`document.querySelector(${JSON.stringify(selector)})`;
     const waitForElement=selector=>waitFor(selector,()=>evaluate(`!!${$(selector)}`));
     const click=selector=>evaluate(`${$(selector)}.click()`);
+    const visible=selector=>evaluate(`!!${$(selector)}?.getClientRects().length`);
     const navigate=page=>click(`#nav [data-page="${page}"]`);
     const fit=label=>evaluate('document.documentElement.scrollWidth <= innerWidth+1').then(value=>assert.ok(value,`${label} overflows the viewport`));
     await call('Runtime.enable');
@@ -137,6 +138,36 @@ async function smokeBrowser(profile){
         await fit(`${mode} at ${width}px`);
       }
     }
+    await evaluate(`(()=>{const select=${$('#workspace-mode')};select.value='chat';select.dispatchEvent(new Event('change'));})()`);
+    await evaluate(`${$('#desktop-wordmark')}.dispatchEvent(new MouseEvent('click',{detail:2,bubbles:true,cancelable:true}));`);
+    assert.ok(await visible('.focus-mode .focus-wordmark'),'Desktop wordmark should open Focus');
+    assert.ok(!await visible('.sidebar'),'Focus should hide the desktop sidebar');
+    assert.ok(await evaluate(`(()=>{
+      const title=${$('.focus-wordmark')}.getBoundingClientRect();
+      const metrics=${$('.pulse-metrics')}.getBoundingClientRect();
+      const status=${$('#pulse-job')}.getBoundingClientRect();
+      const privacy=${$('.privacy-strip')}.getBoundingClientRect();
+      return metrics.left>=title.right && metrics.top<title.bottom && status.top>=title.bottom &&
+        status.bottom<=privacy.top && ${$('#view')}.clientWidth<=1024;
+    })()`),'Focus should put the gauges beside the title, with status on the next row');
+    assert.ok(!await visible('#workspace-welcome')&&!await visible('#prompt'),'Empty Focus should hide the welcome panel and composer');
+    assert.ok(await visible('#focus-compose'),'Empty Focus should let you start writing');
+    await evaluate('window.focusStorageBefore=JSON.stringify(Object.entries(localStorage));');
+    await click('#focus-compose');
+    await evaluate(`(()=>{
+      const prompt=${$('#prompt')};prompt.focus();prompt.value='Keep this draft.';
+      prompt.dispatchEvent(new Event('input'));
+    })()`);
+    await waitFor('the desktop prompt to expand',()=>evaluate(`${$('#prompt')}.clientHeight>innerHeight*.35`));
+    await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));");
+    assert.ok(!await visible('.focus-mode .focus-wordmark'),'Escape should exit Focus');
+    assert.equal(await evaluate(`${$('#prompt')}.value`),'Keep this draft.');
+    assert.ok(await evaluate('window.focusStorageBefore===JSON.stringify(Object.entries(localStorage))'),'Focus and its unsent draft should stay out of browser storage');
+    await click('#enter-focus');
+    await click('#pulse-job');
+    await waitForElement('#cost-coverage');
+    assert.ok(!await visible('.focus-mode .focus-wordmark'),'Navigating from Focus should restore regular layout');
+    assert.ok(await evaluate(`${$('#desktop-wordmark')}.matches('a[href="/"]:not([role])')`),'The desktop wordmark should remain a regular home link outside chat');
     for(const [page,selector] of [['dashboard','#cost-coverage'],['workflows','#rough-cut-workflow'],['meeting','#meeting-preview-settings'],['library','#runs'],['device','#readiness']]){
       await navigate(page);await waitForElement(selector);await fit(page);
     }
@@ -176,7 +207,7 @@ async function smokeBrowser(profile){
     const sections='SECTION B — Timing\n\nSaturday.\n\nSECTION C — Storage\n\nUse the shelf.\n\nSECTION D — Follow-up\n\nSend a note.';
     await call('Page.enable');
     await call('Page.addScriptToEvaluateOnNewDocument',{source:`{
-      const run={id:${JSON.stringify(runId)},name:'Synthetic chat reply',status:'running',keepChatModel:true,
+      const run={id:${JSON.stringify(runId)},name:'Chat & vision',status:'running',phase:'Thinking',keepChatModel:true,
         startedAt:new Date().toISOString(),steps:[{task:'chat',promptMode:'literal',model:'demo/chat',prompt:'Summarize the pickup.'}],outputs:[]};
       const initial=${JSON.stringify(formatted)},final=initial+'\\n'+${JSON.stringify(sections)};
       localStorage.setItem('spindle-last-chat-run',run.id);
@@ -186,7 +217,23 @@ async function smokeBrowser(profile){
       };
       window.advanceSyntheticReply(0);
       const fetchFromServer=window.fetch.bind(window);
-      window.fetch=(url,...args)=>url==='/api/runs'?Promise.resolve(Response.json([run])):fetchFromServer(url,...args);
+      let nextRun;
+      window.fetch=(url,...args)=>{
+        if(url==='/api/run'){
+          if(window.rejectNextFocusSend){
+            window.rejectNextFocusSend=false;
+            return Promise.resolve(Response.json({error:'Synthetic send rejected.'},{status:409}));
+          }
+          nextRun={...run,id:'29c68a10-70e4-49b5-a532-c90699b941da',status:'queued',outputs:[]};
+          return Promise.resolve(Response.json(nextRun));
+        }
+        if(url==='/api/cancel/'+nextRun?.id){
+          window.stoppedFocusRun=nextRun.id;
+          return Promise.resolve(Response.json({ok:true}));
+        }
+        if(url==='/api/runs')return Promise.resolve(Response.json(nextRun?[nextRun,run]:[run]));
+        return fetchFromServer(url,...args);
+      };
     }`});
     await call('Emulation.setDeviceMetricsOverride',{width:320,height:568,deviceScaleFactor:1,mobile:false});
     await call('Page.reload',{ignoreCache:true});
@@ -194,11 +241,36 @@ async function smokeBrowser(profile){
       const status=await evaluate(`({fixture:typeof window.advanceSyntheticReply,restored:!!document.querySelector('#chat-history .from-user'),status:document.querySelector('#output-status')?.textContent})`);
       throw Error(`${error.message}: ${JSON.stringify(status)} ${errors.join(' ')}`);
     });
+    assert.ok(await visible('#mobile-wordmark'),'The mobile wordmark should remain visible at 320px');
+    await click('#mobile-wordmark');
+    assert.ok(await visible('.focus-mode .focus-wordmark'),'The mobile wordmark should open Focus');
+    assert.equal(await evaluate(`${$('#pulse-detail')}.textContent`),'Thinking');
+    assert.ok(await visible('.focus-run-bar #focus-stop'),'A live run should keep Stop run accessible');
+    assert.ok(await visible('#chat-search-notice'),'Focus should keep the search notice visible during a run');
+    assert.ok(!await visible('#prompt'),'The Focus composer should collapse during a run');
+    assert.equal(await evaluate(`${$('#focus-read')}.getAttribute('aria-pressed')`),'true');
+    assert.ok(!await visible('#chat-history .from-user'),'Read should hide the earlier conversation');
+    assert.ok(await visible('[data-chat-live] .chat-code'),'Read should display the streaming response');
+    await fit('Focus with a streaming reply at 320px');
     await evaluate(`window.firstChatBlock=${$('[data-chat-live] h2')}; window.advanceSyntheticReply(1);`);
     await waitFor('formatted streaming update',()=>evaluate(`document.querySelectorAll('[data-chat-live] h2').length===2`));
     assert.ok(await evaluate(`window.firstChatBlock===${$('[data-chat-live] h2')}`),'Streaming replaced an unchanged heading');
     await evaluate('window.advanceSyntheticReply(2)');
     await waitForElement('#chat-history .chat-outline');
+    assert.ok(await visible('#chat-history .chat-outline'),'Read should display the completed response');
+    assert.ok(!await visible('.focus-run-bar'),'The compact run bar should clear when the response completes');
+    assert.ok(!await visible('#task-form')&&!await visible('#chat-run-stats'),'Completed replies should have the reading space to themselves');
+    await click('#focus-chat');
+    assert.ok(!await visible('#prompt'),'Showing the transcript should leave the composer tucked away');
+    assert.ok(await visible('#chat-history .from-user'),'Chat should restore the conversation');
+    await click('#focus-compose');
+    assert.ok(await visible('#chat-search-notice'),'The search warning should be visible while writing');
+    await waitFor('the mobile prompt to expand with Send in view',()=>evaluate(`(()=>{
+      const prompt=${$('#prompt')}.getBoundingClientRect(),send=${$('#run-task')}.getBoundingClientRect();
+      const form=${$('#task-form')}.getBoundingClientRect();
+      return prompt.height>innerHeight*.35 && send.bottom<=form.bottom;
+    })()`));
+    await click('#exit-focus');
     assert.equal(await evaluate(`getComputedStyle(${$('#chat-history .chat-markdown strong')}).display`),'inline');
     assert.ok(await evaluate(`(()=>{const code=${$('#chat-history .chat-code pre')};return code.scrollWidth>code.clientWidth;})()`),'Wide code should scroll within the reply');
     await fit('Formatted reply at 320px');
@@ -209,8 +281,25 @@ async function smokeBrowser(profile){
     assert.equal(await evaluate('window.copiedReply'),diagram+'\r\n');
     await click('#chat-history [data-copy-kind="reply"]');
     assert.equal(await evaluate('window.copiedReply'),formatted+'\n'+sections);
+    await click('#mobile-wordmark');
+    await click('#focus-chat');
+    await click('#focus-compose');
+    await evaluate(`${$('#prompt')}.value='Check the pickup time again.';`);
+    await click('#focus-compose');
+    assert.ok(!await visible('#prompt'),'Hide composer should tuck the editor away');
+    await click('#focus-compose');
+    assert.equal(await evaluate(`${$('#prompt')}.value`),'Check the pickup time again.');
+    await evaluate('window.rejectNextFocusSend=true;');
+    await click('#run-task');
+    await waitFor('rejected Send to restore the Focus composer',()=>evaluate(`${$('#action-error')}.textContent.includes('Synthetic send rejected.') && !!${$('#prompt')}.getClientRects().length`));
+    assert.equal(await evaluate(`${$('#prompt')}.value`),'Check the pickup time again.');
+    await click('#run-task');
+    await waitForElement('.focus-reading #stop-current');
+    assert.ok(!await visible('#focus-compose')&&!await visible('#prompt'),'Sending should return to reading and hide the editor');
+    await click('#focus-stop');
+    assert.equal(await evaluate('window.stoppedFocusRun'),'29c68a10-70e4-49b5-a532-c90699b941da');
     assert.deepEqual(errors,[],'Browser exceptions');
-    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, navigation, device settings, dialogs, cost filters, meeting drafts, and streaming chat formatting and copy.');
+    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, navigation, device settings, dialogs, cost filters, meeting drafts, Focus, and streaming chat formatting and copy.');
   }finally{
     if(ws?.readyState===WebSocket.OPEN)await closeBrowser?.().catch(()=>{});
     ws?.close();

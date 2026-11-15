@@ -1,0 +1,221 @@
+#mobile-wordmark {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text);
+  text-align: start;
+  padding: 0;
+  touch-action: manipulation;
+}
+
+#desktop-wordmark[role="button"], #mobile-wordmark:enabled { cursor: pointer; touch-action: manipulation; }
+#mobile-wordmark:enabled { min-height: 44px; }
+.focus-wordmark, .pulse-job .focus-idle-label, .focus-tools,
+.focus-compose-actions, .focus-run-bar { display: none; }
+
+/* Keep the workbench comfortably readable on large desktop displays. */
+.creating #view:has(.chat-workspace) { max-width: 64rem; }
+
+.focus-mode .shell { display: block; }
+.focus-mode .sidebar, .focus-mode .topbar,
+.focus-mode .workspace-toolbar, .focus-mode .workspace-welcome { display: none; }
+.focus-mode.creating .ambient { opacity: .12; }
+
+.focus-mode.creating main .device-pulse {
+  --focus-gutter: clamp(12px, 3vw, 32px);
+  top: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 10px;
+  width: 100%;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 var(--focus-gutter);
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.focus-mode .focus-wordmark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  font-size: clamp(20px, 3vw, 26px);
+  font-weight: 550;
+  letter-spacing: -.045em;
+}
+
+.focus-wordmark span { color: var(--accent); }
+.focus-mode .pulse-metrics { justify-self: end; }
+.focus-mode .device-pulse::before {
+  content: '';
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: stretch;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(90deg, #c5efa709, transparent 75%);
+  pointer-events: none;
+}
+
+.focus-mode .device-pulse .pulse-job {
+  grid-area: 2 / 1;
+  max-width: none;
+  min-width: 0;
+  min-height: 46px;
+  margin: 0;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  gap: 8px;
+}
+
+.focus-mode .pulse-job > span:nth-child(2),
+.focus-mode .pulse-job small { display: block; }
+.focus-mode .device-pulse:not(.working) .focus-idle-label { display: block; }
+.focus-mode .device-pulse:not(.working) #pulse-title { display: none; }
+
+.focus-mode .focus-tools {
+  display: flex;
+  grid-area: 2 / 2;
+  justify-self: end;
+  align-items: center;
+  gap: 8px;
+  padding-inline-end: 4px;
+}
+
+.focus-views {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.focus-mode:has(.chat-history .from-assistant, .workspace-result:not([hidden])) .focus-views { display: flex; }
+.focus-tools .button { min-height: 34px; padding: 4px 9px; white-space: nowrap; font-size: 11px; }
+.focus-views .button { min-height: 30px; border-color: transparent; }
+.focus-views .button[aria-pressed="true"] { color: var(--accent); background: #c9f79913; }
+
+.focus-mode.creating .privacy-strip {
+  width: min(calc(100% - 24px), 60rem);
+  margin: 0 auto;
+  padding: 3px 0;
+}
+
+.focus-mode.creating #view:has(.chat-workspace) { padding: 6px clamp(12px, 3vw, 32px) 10px; }
+.focus-mode .conversation {
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  padding-inline: 2px;
+  scrollbar-color: #73849e80 transparent;
+}
+.focus-mode .chat-history { gap: clamp(18px, 3vw, 34px); }
+.focus-mode .creation-workspace .chat-message.from-user { width: fit-content; justify-self: end; }
+.focus-mode .workspace-result { padding-block-start: 8px; }
+.focus-mode .workspace-result .result-status,
+.focus-mode .workspace-result .output-meta { display: none; }
+
+.focus-mode .chat-workspace .chat-markdown {
+  max-width: none;
+  font: clamp(16px, 1.5vw, 19px)/1.65 "PT Serif", Georgia, serif;
+  overflow-wrap: anywhere;
+}
+
+.focus-mode .chat-markdown h2 {
+  margin-block: 1.25em .45em;
+  padding-inline-start: 0;
+  border: 0;
+  font-size: 1.55em;
+  font-weight: 500;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+  color: #eef4e8;
+}
+
+.focus-mode .chat-markdown h2:first-child { margin-top: 0; }
+.focus-mode .chat-markdown blockquote {
+  padding: .6em 1em;
+  border-color: #a6d2b685;
+  background: #9ed3c409;
+}
+
+.focus-mode .chat-markdown .chat-outline,
+.focus-mode .chat-markdown .chat-table-scroll,
+.focus-mode .chat-markdown .chat-code { font-family: "Segoe UI", sans-serif; }
+
+.focus-mode .focus-compose-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: 4px 2px;
+}
+.focus-mode #focus-compose { min-height: 36px; }
+.focus-mode .chat-workspace:has(.run-pending) .focus-compose-actions,
+.focus-mode:not(.focus-writing) .creation-composer:not(.run-pending) { display: none; }
+.focus-mode:not(.focus-writing) .conversation:has(.workspace-welcome:not([hidden])) { flex: 0; }
+.focus-mode:not(.focus-writing) .chat-workspace:has(.workspace-welcome:not([hidden])) .focus-compose-actions {
+  justify-content: center;
+  margin: auto;
+}
+
+.focus-mode .chat-workspace .creation-composer { max-height: 64%; }
+.focus-mode .chat-workspace .creation-composer:has(.chat-options[open]) { max-height: 75%; }
+.focus-mode .chat-workspace .creation-composer:has(.prompt-field:focus-within) {
+  max-height: calc(100% - 46px);
+}
+.focus-mode .chat-workspace .prompt-field:focus-within #prompt {
+  height: clamp(64px, calc(var(--app-height, 100dvh) * .43), 34rem) !important;
+  max-height: none;
+}
+
+.focus-mode .run-pending .composer-surface,
+.focus-mode .run-pending .chat-options,
+.focus-mode .workspace-result .working-message { display: none; }
+.focus-mode .run-pending .focus-run-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+}
+
+.focus-run-bar .button { min-height: 34px; padding: 4px 9px; }
+
+.focus-reading .chat-workspace .chat-run-stats,
+.focus-reading .chat-history .chat-message:not(.from-assistant:last-child),
+.focus-reading .conversation:has(.workspace-result:not([hidden])) .chat-history { display: none; }
+
+@media (max-width: 700px) {
+  .chat-workspace #enter-focus { padding-inline: 6px; }
+  .focus-mode .focus-wordmark { min-height: 48px; }
+  .focus-mode .pulse-metrics { gap: clamp(4px, 2vw, 12px); }
+  .focus-mode .pulse-metric > svg:first-child { width: clamp(16px, 5.6vw, 27px); height: auto; }
+  .focus-mode .device-pulse .pulse-job { padding-inline: 4px; gap: 6px; }
+  .focus-mode .pulse-job .pulse-orbit { width: 26px; height: 26px; }
+  .focus-mode .pulse-job small { max-width: 100%; }
+  .focus-mode #pulse-percent, .focus-mode .privacy-symbol { display: none; }
+  .focus-tools { column-gap: 4px; }
+  .focus-tools .button { padding-inline: 6px; }
+}
+
+@media (max-width: 365px) {
+  .topbar #mobile-wordmark:enabled { display: block; font-size: 18px; }
+}
+
+@media (max-height: 520px) {
+  .focus-mode .chat-workspace .prompt-field:focus-within #prompt {
+    height: clamp(44px, calc(var(--app-height, 100dvh) * .26), 120px) !important;
+  }
+}
+
+@media (max-height: 460px) and (max-width: 700px) {
+  .focus-mode .focus-wordmark { min-height: 38px; }
+  .focus-mode .device-pulse .pulse-job { min-height: 38px; }
+  .focus-mode .privacy-strip .text-button { min-height: 28px; }
+  .focus-mode .creation-composer:has(.prompt-field:focus-within) .composer-top { display: none; }
+}
