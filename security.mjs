@@ -19,9 +19,13 @@ export function requestAccess(req,{port,secret,pathname}){
   if((privateRoute&&pathname!=='/api/session'||write)&&!req.headers.cookie?.split(';').some(c=>c.trim()==='spindle='+secret))return {status:403,error:'Open Spindle locally before accessing private data or making changes.'};
   return null;
 }
-export function redactError(value,secrets=[]){
-  let text=String(value?.message || value || 'Request failed.');
+export function redactSecrets(value,secrets=[]){
+  let text=String(value);
   for(const secret of secrets.filter(v=>typeof v==='string'&&v.length>0))for(const variant of new Set([secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')]))text=text.replaceAll(variant,'[redacted]');
+  return text;
+}
+export function redactError(value,secrets=[]){
+  const text=redactSecrets(value?.message || value || 'Request failed.',secrets);
   return text.replace(/\b[A-Za-z]:[\\/](?:[^\s"'<>]|\\ )+/g,'[local path]').replace(/\/(?:Users|home)\/[^\s"'<>]+/g,'[local path]');
 }
 

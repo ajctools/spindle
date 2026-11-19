@@ -6,14 +6,16 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 
 export const RELEASE_FILES=[
-  '.env.example','.gitignore','.gitattributes','README.md','Start-Spindle.ps1','package.json','server.mjs','meeting.mjs','core.mjs','connection.mjs','metrics.mjs','security.mjs','chat.mjs','vault.mjs','web-search.mjs','creative.mjs','film.mjs','museum.mjs','museum-source.mjs','museum-shape.mjs','museum-media.mjs','museum-author.mjs','museum-runtime.mjs','museum-app-data.mjs','museum-app-check.mjs','museum-author-run.mjs','model-idle.mjs','music.mjs','soundtrack.mjs','rough-cut.mjs',
+  '.env.example','.gitignore','.gitattributes','README.md','Start-Spindle.ps1','package.json','server.mjs','meeting.mjs','core.mjs','connection.mjs','metrics.mjs','security.mjs','chat.mjs','project-memory.mjs','vault.mjs','web-search.mjs','creative.mjs','film.mjs','museum.mjs','museum-source.mjs','museum-shape.mjs','museum-media.mjs','museum-author.mjs','museum-runtime.mjs','museum-app-data.mjs','museum-app-check.mjs','museum-author-run.mjs','model-idle.mjs','music.mjs','soundtrack.mjs','rough-cut.mjs',
   'LICENSE','SECURITY.md','CONTRIBUTING.md','.github/workflows/ci.yml','docs/SECURITY.md','docs/VALIDATION.md','docs/USAGE.md','docs/MUSEUM.md','scripts/release.mjs','scripts/preview-demo.mjs','scripts/regression.mjs',
   'docs/images/hero.svg','docs/images/how-it-works.svg','docs/images/chat.jpg','docs/images/dashboard.jpg','docs/images/workbench.jpg','docs/images/workflows.jpg','docs/images/connection.jpg','docs/images/cloud-cost.jpg','docs/images/meeting.jpg','docs/images/field-guide.jpg',
-  'public/vendor/three-r187.min.js','public/vendor/three-r187.json','public/vendor/THREE-LICENSE.txt','public/app.js','public/chat-ui.mjs','public/chat-settings.mjs','public/chat-attachments.mjs','public/vault-attachment.mjs','public/prompt-dex.mjs','public/global-search.mjs','public/global-search.css','public/meeting-desk.mjs','public/meeting-transcript.mjs','public/audio.js','public/dashboard.js','public/dashboard-table.mjs','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css','public/studio.mjs','public/studio.css','public/workshops.mjs','public/rough-cut.mjs','public/museum-viewer.html','public/museum-engine.js','public/museum-renderer.js','public/museum-geometry.mjs','public/museum-recipes.mjs','public/cloud-cost.mjs','public/cost-panel.mjs','public/activity.mjs','public/mesh-preview.mjs','public/refinements.css',
+  'public/vendor/three-r187.min.js','public/vendor/three-r187.json','public/vendor/THREE-LICENSE.txt','public/app.js','public/chat-ui.mjs','public/chat-settings.mjs','public/chat-attachments.mjs','public/project-memory.mjs','public/vault-attachment.mjs','public/prompt-dex.mjs','public/global-search.mjs','public/global-search.css','public/meeting-desk.mjs','public/meeting-transcript.mjs','public/audio.js','public/dashboard.js','public/dashboard-table.mjs','public/dashboard.css','public/effects.js','public/experience.css','public/favicon.svg','public/guidance.mjs','public/guidance.css','public/index.html','public/styles.css','public/studio.mjs','public/studio.css','public/workshops.mjs','public/rough-cut.mjs','public/museum-viewer.html','public/museum-engine.js','public/museum-renderer.js','public/museum-geometry.mjs','public/museum-recipes.mjs','public/cloud-cost.mjs','public/cost-panel.mjs','public/activity.mjs','public/mesh-preview.mjs','public/refinements.css',
   'fixtures/document.png','fixtures/speech.wav','fixtures/star.png','fixtures/voice-reference.wav',
   'public/artifact-download.mjs','public/meeting-packet.mjs','public/facsimile-book.mjs','test/artifact-handoffs.test.mjs',
-  'public/focus.css',
-  'test/adapters.test.mjs','test/chat.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs','test/creative.test.mjs','test/workshops.test.mjs','test/museum.test.mjs','test/museum-media.test.mjs','test/museum-recovery.test.mjs','test/music.test.mjs','test/cloud-cost.test.mjs','test/preview.test.mjs','test/museum-author.test.mjs','test/author-route.test.mjs','test/rough-cut.test.mjs','test/meeting.test.mjs','test/global-search.test.mjs',
+  'public/focus.css','custom-endpoints.mjs','test/custom-endpoints.test.mjs','scripts/tiiny-usb-relay.mjs','test/tiiny-relay.test.mjs',
+  'eyewall.mjs','public/eyewall/index.html','public/eyewall/app.mjs','public/eyewall/live.mjs','public/eyewall/read-state.mjs','public/eyewall/style.css','public/eyewall/incidents.mjs','public/eyewall/globe.mjs','public/eyewall/earth.jpg','public/eyewall/world.geojson',
+  'public/eyewall/mark.css',
+  'test/adapters.test.mjs','test/chat.test.mjs','test/project-memory.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs','test/creative.test.mjs','test/workshops.test.mjs','test/museum.test.mjs','test/museum-media.test.mjs','test/museum-recovery.test.mjs','test/music.test.mjs','test/cloud-cost.test.mjs','test/preview.test.mjs','test/museum-author.test.mjs','test/author-route.test.mjs','test/rough-cut.test.mjs','test/meeting.test.mjs','test/global-search.test.mjs',
 ];
 const patterns=[
   ['private key',/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
@@ -23,6 +25,10 @@ const patterns=[
 ];
 export function scanReleaseFile(name,bytes,known=[]){
   const findings=[];
+  if(bytes.subarray(0,16).toString('ascii')==='SQLite format 3\0'||/\.(?:db|sqlite3?)(?:-(?:wal|shm|journal))?$/i.test(name))
+    findings.push('runtime database or journal');
+  if(name.split('/').some(part=>part==='data'||part.startsWith('.codex')||part.startsWith('.runtime-')||(/^\.env(?:\.|$)/.test(part)&&part!=='.env.example')))
+    findings.push('private runtime path');
   const jpeg=bytes[0]===255&&bytes[1]===216;
   const binaryImage=jpeg||bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   const binaryAudio=bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WAVE';
@@ -34,7 +40,7 @@ export function scanReleaseFile(name,bytes,known=[]){
   for(const email of text.match(/\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g) || [])if(!/(?:@|\.)example(?:\.com|\.org|\.net)?$/i.test(email))findings.push('email address');
   for(const address of text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || []){
     const parts=address.split('.').map(Number);if(parts.some(n=>n>255))continue;
-    if(address!=='127.0.0.1'&&!/^(?:192\.0\.2|198\.51\.100|203\.0\.113)\./.test(address))findings.push('non-documentation IP address');
+    if(parts[0]!==127&&!/^(?:192\.0\.2|198\.51\.100|203\.0\.113)\./.test(address))findings.push('non-documentation IP address');
   }
   for(const [address]of text.matchAll(/(?<![\w:])(?:[\da-f]{0,4}:){2,7}[\da-f]{0,4}(?:\.\d{1,3}){0,3}(?![\w:])/gi)){
     if(isIP(address)===6&&!/^::1$|^2001:db8(?=:)/i.test(address))findings.push('non-documentation IP address');
@@ -64,6 +70,13 @@ export async function localDenyValues(root){
   }catch{}
   addAddress(process.env.TIINY_HOST);
   values.push({label:'environment device key',value:process.env.TIINY_KEY});
+  try{
+    const profiles=JSON.parse(await fs.readFile(path.join(process.env.SPINDLE_DATA_DIR || path.join(root,'data'),'custom-endpoints.json'),'utf8'));
+    for(const row of profiles){
+      addAddress(row.url);
+      values.push({label:'remembered custom endpoint key',value:row.key});
+    }
+  }catch{}
   return values;
 }
 export async function buildRelease({root,output,known=[]}){

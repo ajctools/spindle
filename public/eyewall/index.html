@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore the public evidence behind AI incidents over time.">
+  <title>Eyewall · Spindle</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./mark.css">
+  <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./live.mjs"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell masthead">
+      <a class="brand" href="./" aria-label="Eyewall home"><span class="brand-mark" aria-hidden="true"><span class="eyewall-mark"><i></i></span></span>EYEWALL</a>
+      <div class="header-actions">
+        <a class="dashboard-link" href="/?view=dashboard">Spindle Dashboard</a>
+        <button class="button" id="open-leads" type="button">Saved leads <span id="lead-count" hidden></span></button>
+      </div>
+    </div>
+  </header>
+  <main class="shell">
+    <header class="page-intro">
+      <div>
+        <h1>AI Incident Atlas</h1>
+        <p>Explore public reports, then rewind to see what was known at the time.</p>
+      </div>
+      <dl class="metrics">
+        <div><dt>Cases</dt><dd id="count" role="status">0</dd></div>
+        <div><dt>Mapped</dt><dd id="located">0</dd></div>
+        <div><dt>Source updates</dt><dd id="updates">0</dd></div>
+      </dl>
+    </header>
+
+    <div class="workspace">
+      <section class="panel atlas" aria-label="Incident atlas">
+        <div class="scene" id="scene">
+          <canvas id="globe" tabindex="0" aria-label="World globe. Use the arrow keys to rotate it. Cases are also available in the incident register."></canvas>
+          <div id="map" hidden>
+            <canvas id="map-canvas" width="900" height="410" aria-label="World map"></canvas>
+          </div>
+          <div class="pins" id="map-pins"></div>
+          <header class="scene-header">
+            <h2 id="browse-title">Global view</h2>
+            <div class="segmented" role="group" aria-label="Map projection">
+              <button type="button" id="globe-view" aria-pressed="true">Globe</button>
+              <button type="button" id="map-view" aria-pressed="false">Flat map</button>
+            </div>
+          </header>
+          <div class="scene-tools" id="scene-tools">
+            <button type="button" class="icon-button" id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+            <button type="button" class="icon-button" id="zoom-out" aria-label="Zoom out" title="Zoom out">−</button>
+            <button type="button" class="icon-button" id="reset-camera" aria-label="Reset globe view" title="Reset globe view">◎</button>
+          </div>
+          <div class="scene-footer">
+            <span id="map-note">Drag to rotate</span>
+            <span id="texture-credit">NASA Blue Marble</span>
+          </div>
+        </div>
+        <section class="playback" aria-labelledby="playback-title">
+          <div class="playback-header">
+            <div>
+              <h2 id="playback-title">Evidence replay</h2>
+              <p id="playback-case"></p>
+            </div>
+            <div class="date-actions">
+              <label class="sr-only" for="as-of">View public evidence as of</label>
+              <input id="as-of" type="date" required max="2026-11-19" value="2026-11-19">
+              <button class="button" id="latest" type="button">Latest</button>
+            </div>
+          </div>
+          <div class="playback-controls">
+            <button class="button primary" id="play" type="button">Play timeline</button>
+            <div id="milestones" aria-label="Evidence dates"></div>
+          </div>
+        </section>
+      </section>
+      <section class="panel side-panel" aria-label="Brief and live reports">
+        <div class="side-tabs" role="group" aria-label="Choose incident brief or live reports">
+          <button type="button" id="brief-tab" aria-pressed="true" aria-controls="details">Case brief</button>
+          <button type="button" id="live-tab" aria-pressed="false" aria-controls="live-panel">
+            <span class="feed-dot" aria-hidden="true"></span>Live reports <span id="live-count" hidden></span>
+          </button>
+        </div>
+        <article class="details" id="details" aria-label="Selected incident"></article>
+        <section class="live-panel" id="live-panel" aria-labelledby="live-title" hidden>
+          <header class="live-header">
+            <div class="live-title-row">
+              <h2 id="live-title">Live reports</h2>
+              <button type="button" class="button primary" id="refresh-feeds">Refresh feeds</button>
+            </div>
+            <p>Public reports and community leads, unverified by Eyewall.</p>
+            <p id="feed-status" role="status"></p>
+            <details class="feed-options">
+              <summary>Sources and local model</summary>
+              <label class="feed-toggle"><input id="auto-feed" type="checkbox">Refresh every 15 minutes while Spindle is visible</label>
+              <p>Refresh contacts public news and community feeds using fixed queries. Reports are kept in a local cache.</p>
+              <ul id="source-health" aria-label="Feed status"></ul>
+              <div class="model-controls">
+                <button type="button" class="button" id="detect-models">Find Spindle models</button>
+                <label class="sr-only" for="triage-model">Spindle model</label>
+                <select id="triage-model" disabled><option value="">Select a model</option></select>
+              </div>
+              <label class="feed-toggle"><input id="auto-triage" type="checkbox" disabled>Run selected model after refresh</label>
+              <button type="button" class="button" id="triage-reports" disabled>Triage current headlines</button>
+              <p id="model-status" role="status">Optional. Review public headlines with a loaded Tiiny chat model or a configured local endpoint.</p>
+            </details>
+            <label class="live-filter">Show
+              <select id="report-type">
+                <option value="all">All reports</option>
+                <option value="news">News reports</option>
+                <option value="community">Community leads</option>
+              </select>
+            </label>
+          </header>
+          <div class="live-scroll" id="live-scroll" tabindex="0" aria-label="Unverified reports">
+            <div id="live-reports"></div>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <section class="panel register" aria-labelledby="register-title">
+      <header class="register-header">
+        <div>
+          <h2 id="register-title">Incident register</h2>
+          <p>Curated cases through November 19, 2026</p>
+        </div>
+        <div class="filters">
+          <label class="search">
+            <span class="sr-only">Search incidents</span>
+            <span class="magnifier" aria-hidden="true"></span>
+            <input id="search" type="search" placeholder="Search incidents" maxlength="160" autocomplete="off">
+          </label>
+          <label class="category">
+            <span class="sr-only">Filter by category</span>
+            <select id="category"><option value="">All categories</option></select>
+          </label>
+        </div>
+      </header>
+      <div id="list"></div>
+    </section>
+
+    <footer class="site-footer">
+      <span>Locations are approximate. Cases with unknown impact areas appear in the register.</span>
+      <a href="/?guide=eyewall">Eyewall field guide</a>
+    </footer>
+  </main>
+
+  <dialog id="lead-dialog" aria-labelledby="lead-title">
+    <header class="dialog-header">
+      <div>
+        <h2 id="lead-title">Saved leads</h2>
+        <p>Keep public links for review in this browser.</p>
+      </div>
+      <button type="button" class="button" id="close-leads">Close</button>
+    </header>
+    <form id="lead-form">
+      <label>Title<input name="title" required maxlength="100" placeholder="What did you find?"></label>
+      <label>Source URL<input name="url" type="url" required maxlength="2048" placeholder="https://example.org/report"></label>
+      <button type="submit" class="button primary">Save lead</button>
+    </form>
+    <p id="lead-message" role="status"></p>
+    <ul id="lead-list"></ul>
+  </dialog>
+</body>
+</html>

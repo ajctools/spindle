@@ -42,6 +42,7 @@ guides.music.examples.push(
 );
 guides.chat.tips.unshift('Use PromptDex for reusable prompts or a side-by-side model comparison. Use Attach from Vault to select an excerpt from your Tiiny when supported.');
 guides.chat.tips.push('Watch the run strip for elapsed time, context used, output speed, and prompt-cache hits. An approximation marker means the runtime has yet to provide an exact count.');
+guides.chat.tips.push('Use Focus to give the active chat more room. Save a useful reply as a project checkpoint or pause project recall for the next turn. Use a custom or cloud model by explicitly choosing it in the Chat model picker.');
 guides.asr.tips.push('Use Meeting Desk when you want to record, follow timestamped transcript lines, or draft and review meeting minutes.');
 export const essentials=[
   {title:'Available, downloaded, loaded',text:'Available means a model is listed in the store. Downloaded means its files are on the device. Loaded means it occupies runtime capacity and is ready for requests. Download a model once, then load it when needed.'},
@@ -52,7 +53,7 @@ export const essentials=[
   {title:'What “verified” means',text:'A recorded sample completed with a particular model on this device. Use Test capability to check your own selected model. Every mode or parameter is not covered by a single sample.'},
   {title:'Advanced settings, steps, and seeds',text:'Advanced settings are optional JSON sent to the model. Steps control generation passes where supported. A fixed seed can make comparisons more consistent when prompt, model, and settings stay the same; exact repeatability depends on the runtime.'},
   {title:'Context window',text:'This is how much information a model can consider in one request, measured in tokens—pieces of text. A larger window can hold more material, but long inputs can still take time. Supply the context needed for the task.'},
-  {title:'Where your work goes',text:'Spindle saves prompts, run records, and generated outputs in its local data folder. Some workflows also save source media for playback or resume. The endpoint in Device → Connection receives the inference inputs.'}
+  {title:'Where your work goes',text:'Spindle saves prompts, run records, and outputs in its local data folder. The selected model’s endpoint receives your chat inputs. Settings manages Tiiny, Custom endpoints, and Cloud endpoints.'}
 ];
 export const workflowTips=[
   {title:'Choose a guided workflow',text:'Use Idea → image → film to animate a saved image. Repair soundtrack to replace dialogue. Use Recording → rough cut to review retakes, or Facsimile Book to turn reviewed scans and translations into an offline booklet.'},
@@ -79,6 +80,24 @@ export const workspaceTips={
       {title:'Filter the measurements',text:'Choose a date range, connection, model, or task. Expand a record to see its usage source, timing, cache counts, and generation settings. A dash means the runtime did not supply the measurement.'},
       {title:'Compare like for like',text:'Run a fixed text benchmark with a loaded Chat model. Use the same prompt and settings for comparisons. Runtime decode speed and total execution time measure different parts of the run.'},
       {title:'Read the device and cost views',text:'Live hardware measures NPU, CPU, and RAM activity. Tiiny’s weekly ledger covers device-wide usage. Cloud estimates apply editable rates to qualifying Spindle text runs locally.'},
+      {title:'Open Eyewall',text:'The Dashboard links to the incident atlas. The eye-and-brick shortcut beside the Spindle star opens Live reports directly.'},
+    ],
+  },
+  eyewall:{
+    title:'Eyewall',
+    items:[
+      {title:'See new reports',text:'The eye-and-brick shortcut pulses when the current browser has unread reports. Opening Live reports marks the current batch as seen. Refresh manually or enable a 15-minute refresh while Spindle is visible.'},
+      {title:'Read the sourcing',text:'News headlines and community leads are marked Unverified. Open the linked source to check its claims. Sources and local model shows which feeds were reachable. Saved leads stores your public links in this browser.'},
+      {title:'Use the atlas and replay',text:'Rotate the globe or switch to Flat map. Select a mapped case or search the register, then choose an evidence date to see what was public at that point. Map markers use documented impact areas. Cases with unknown locations remain in the register.'},
+      {title:'Ask a local model for labels',text:'Load a chat model on Tiiny, then use Find Spindle models. Eligible local Custom endpoints are also available. Review sends up to twelve public headlines and adds topic and relevance suggestions. Reports remain unverified.'},
+    ],
+  },
+  endpoints:{
+    title:'Chat endpoints',
+    items:[
+      {title:'Choose the right settings section',text:'Use Tiiny connection for your device. Use Custom endpoints for a self-hosted OpenAI-compatible API and Cloud endpoints for a hosted API over HTTPS. Enter its base URL and use Discover models & save.'},
+      {title:'Pick a model in Chat',text:'Choose the endpoint’s model in the Chat picker. Changing endpoints starts a fresh conversation. These profiles support text and attached text files. Tiiny handles media, Vault, project recall, and workflows.'},
+      {title:'Check what leaves Spindle',text:'Send shares the prompt, earlier turns, and attached text with the selected endpoint. Only that endpoint receives its own key. Leave Remember the key off for a session-only key. The notice beside Send names the destination.'},
     ],
   },
   library:{
@@ -87,6 +106,7 @@ export const workspaceTips={
       {title:'Search Spindle',text:'Press Ctrl+K or ⌘K to find saved chat replies, meeting passages, runs, workflows, PromptDex recipes, models, or a workspace. Search stays in this browser.'},
       {title:'Use PromptDex',text:'Prepare a prompt with sample inputs, then insert it into Chat. Compare two downloaded models on the same input and response allowance with web search off.'},
       {title:'Open a saved output',text:'Library & runs keeps generated media and run history. Open a compatible GLB to inspect the shape. Use a saved image for a film or a saved video for soundtrack repair.'},
+      {title:'Continue with project memory',text:'Save an important reply as a checkpoint. Review its brief, then select the brief or full result for a later turn. Automatic recall uses relevant checkpoints and can be paused. Removing a checkpoint also removes its cached vector; the original run and any exports are separate.'},
     ],
   },
 };

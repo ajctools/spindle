@@ -44,7 +44,7 @@ export function chatSettings(params={},model={}){
 }
 const isChatStream=response=>response.headers.get('content-type')?.includes('text/event-stream');
 
-export async function requestChatResponse(request,{signal,onUpdate,startupTimeout=1_800_000,idleTimeout=1_800_000}={}){
+export async function requestChatResponse(request,{signal,onUpdate,service='Tiiny',startupTimeout=1_800_000,idleTimeout=1_800_000}={}){
   const deadline=new AbortController();
   const requestSignal=signal?AbortSignal.any([signal,deadline.signal]):deadline.signal;
   let timer;
@@ -53,28 +53,28 @@ export async function requestChatResponse(request,{signal,onUpdate,startupTimeou
     timer=setTimeout(()=>deadline.abort(new DOMException(message,'TimeoutError')),delay);
     timer.unref();
   };
-  arm(startupTimeout,'Timed out waiting for Tiiny’s chat response.');
+  arm(startupTimeout,'Timed out waiting for '+service+'’s chat response.');
   try{
     const response=await request(requestSignal);
     const onActivity=isChatStream(response)
-      ?()=>arm(idleTimeout,'Tiiny’s chat stream stopped sending data and timed out.')
+      ?()=>arm(idleTimeout,service+'’s chat stream stopped sending data and timed out.')
       :undefined;
     onActivity?.();
-    return {response,result:await readChatResponse(response,{signal:requestSignal,onUpdate,onActivity})};
+    return {response,result:await readChatResponse(response,{signal:requestSignal,onUpdate,onActivity,service})};
   }catch(e){
     requestSignal.throwIfAborted();
     throw e;
   }finally{clearTimeout(timer);}
 }
 
-export async function readChatResponse(response,{onUpdate=()=>{},onActivity,signal}={}){
+export async function readChatResponse(response,{onUpdate=()=>{},onActivity,signal,service='Tiiny'}={}){
   if(!isChatStream(response)){
     const json=await response.json();
     if(json.error||json.success===false)throw new Error('Chat response failed: '+(json.error?.message || 'runtime error'));
     const message=json.choices?.[0]?.message;
-    if(!message)throw new Error('Tiiny returned no chat message.');
+    if(!message)throw new Error(service+' returned no chat message.');
     const result={...chatMessage(message),finishReason:json.choices[0].finish_reason || null,json,streamed:false};
-    if(!result.text&&!result.reasoning)throw new Error('Tiiny returned an empty chat response.');
+    if(!result.text&&!result.reasoning)throw new Error(service+' returned an empty chat response.');
     onUpdate(result,json);return result;
   }
   const reader=response.body.getReader(),decoder=new TextDecoder();
@@ -84,7 +84,7 @@ export async function readChatResponse(response,{onUpdate=()=>{},onActivity,sign
     const data=event.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
     if(!data)return;
     if(data.trim()==='[DONE]'){done=true;return;}
-    let value;try{value=JSON.parse(data);}catch{throw new Error('Tiiny returned an invalid chat stream frame.');}
+    let value;try{value=JSON.parse(data);}catch{throw new Error(service+' returned an invalid chat stream frame.');}
     if(value.error)throw new Error('Chat stream failed: '+(value.error.message || 'runtime error'));
     const {usage,timings,...rest}=value;
     json={...json,...rest,...(usage?{usage:{...json.usage,...usage}}:{}),...(timings?{timings:{...json.timings,...timings}}:{})};
@@ -105,7 +105,7 @@ export async function readChatResponse(response,{onUpdate=()=>{},onActivity,sign
     }
     if(!done&&!finishReason)throw new Error('The chat stream ended before completion. Partial output is shown; retry explicitly.');
     const result=update();
-    if(!result.text&&!result.reasoning)throw new Error('Tiiny returned an empty chat response.');
+    if(!result.text&&!result.reasoning)throw new Error(service+' returned an empty chat response.');
     json.choices=[{message:{role:'assistant',content:result.text,reasoning_content:result.reasoning},finish_reason:finishReason}];
     return {...result,json,streamed:true};
   }finally{await reader.cancel().catch(()=>{});reader.releaseLock();}

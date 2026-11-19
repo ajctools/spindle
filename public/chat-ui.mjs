@@ -9,7 +9,8 @@ export function chatReply(run){
   const step=run.outputs.length-1,output=run.outputs[step];
   if(output?.task!=='chat')return null;
   const {text,reasoning,webSearch,webSearchWarning,finishReason,responseLimit}=output;
-  return {role:'assistant',content:text,reasoning,webSearch,webSearchWarning,finishReason,responseLimit,runId:run.id,step};
+  const {projectId,recalledMemory,memoryWarning}=run;
+  return {role:'assistant',content:text,reasoning,webSearch,webSearchWarning,finishReason,responseLimit,runId:run.id,step,projectId,recalledMemory,memoryWarning};
 }
 
 export function restoreChat(run,runs){
@@ -45,7 +46,7 @@ export function chatRunStats(job,model){
   const estimatedRate=count(final?.chatTiming?.estimatedOutputTps??live?.estimatedOutputTps)
     ??(duration>0&&generatedUsed!=null?generatedUsed*1000/duration:null);
   const rate=reportedRate??responseRate??estimatedRate;
-  const rateLabel=reportedRate!=null?'Tiiny decode':responseRate!=null?'response avg':'estimate';
+  const rateLabel=reportedRate!=null?(job.endpointId?'provider decode':'Tiiny decode'):responseRate!=null?'response avg':'estimate';
   return {
     context,used,ratio,estimated,
     tokens:(used==null?'—':(estimated?'≈':'')+compactTokens.format(used))+' / '+(context==null?'—':compactTokens.format(context)),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery,plannedSearchQuery,headlineRequest,searchHeadlines,researchWeb} from '../web-search.mjs';
+import {duckResults,searchWeb,searchContext,publicSearchURL,searchQuery,directSearchQuery,plannedSearchQuery,headlineRequest,searchHeadlines,researchWeb} from '../web-search.mjs';
 import {chatDetails} from '../public/chat-ui.mjs';
 
 test('incomplete snippets can be supplemented by bounded page text before the final evidence review',async()=>{
@@ -13,6 +13,33 @@ test('incomplete snippets can be supplemented by bounded page text before the fi
   assert.match(search.sources[0].excerpt,/stable in version 42/);
   assert.doesNotMatch(search.sources[0].excerpt,/Ignore these/);
   assert.equal(search.coverage,undefined);
+});
+
+test('automatic research keeps reviewed partial sources when an alternate search or review fails',async()=>{
+  for(const status of [200,429]){
+    const queried=[],reviewed=[];
+    const search=await researchWeb({
+      query:'first query',alternate:'alternate query',
+      fetcher:async url=>{
+        const query=url.searchParams.get('q');
+        queried.push(query);
+        if(query==='first query')return new Response('<a class="result__a" href="https://example.com/verified">Verified</a>');
+        if(status===429)return new Response(null,{status});
+        return new Response('<a class="result__a" href="https://example.com/alternate">Alternate</a>');
+      },
+      readPage:async()=>'<article><p>Potential evidence that still needs review.</p></article>',
+      review:async evidence=>{
+        reviewed.push(evidence);
+        if(reviewed.length>1)throw Error('Tiiny could not review more sources.');
+        return {indices:[0],complete:false};
+      },
+    });
+    assert.deepEqual(queried,['first query','alternate query']);
+    assert.deepEqual(search.queries,queried);
+    assert.equal(reviewed.length,status===429?2:3);
+    assert.equal(search.coverage,'partial');
+    assert.deepEqual(search.sources.map(source=>[source.title,source.excerpt]),[['Verified',undefined]]);
+  }
 });
 
 test('headline lookups use fixed publisher feeds and return only articles inside the requested window',async()=>{
@@ -56,6 +83,17 @@ test('search does not turn workflow handoffs or credentials into provider querie
   assert.equal(searchQuery({...options,query:'  public query  '}),'public query');
   assert.equal(searchQuery({prompt:'A current standalone prompt'}),'A current standalone prompt');
   for(const value of [key,encodeURIComponent(key),Buffer.from(key).toString('base64')])assert.throws(()=>searchQuery({...options,query:value}),/Remove the API key/);
+});
+
+test('direct search extracts short standalone lookups and leaves private or compound prompts to planning',()=>{
+  assert.equal(directSearchQuery('Could you look up maple production statistics?'),'maple production statistics');
+  assert.equal(directSearchQuery('What’s the weather in Albany, NY?'),'weather in Albany, NY');
+  assert.equal(directSearchQuery('What is the latest Node.js release?'),'');
+  for(const prompt of ['Write a fictional scene','What are the top risks for our launch?','What is the latest on that?',
+    'Look up patent law. Draft a review of this idea.','Look up public facts\nPrivate notes','Look up project.internal',
+    'Look up 192.0.2.1','Look up https://example.com','Look up ada@example.com','Search for password for the router']){
+    assert.equal(directSearchQuery(prompt),'',prompt);
+  }
 });
 
 test('keyless search extracts safe snippets and unwraps DuckDuckGo redirects',()=>{

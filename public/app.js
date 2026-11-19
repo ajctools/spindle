@@ -12,6 +12,7 @@ import {loadChatOptions,saveChatOptions,withResponseLimit,ampleResponseTokens,AM
 // Keep existing workspaces usable until the helper can serve the new module.
 const globalSearch=await import('./global-search.mjs').catch(()=>null);
 const vaultAttachment=await import('./vault-attachment.mjs').catch(()=>null);
+const projectModule=await import('./project-memory.mjs').catch(()=>null);
 const facsimileModule=await import('./facsimile-book.mjs').catch(()=>null);
 const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>({
   mount(element){element.innerHTML='<section class="panel"><div class="panel-head"><h2>Idea → image → film</h2><span class="pill">Helper restart needed</span></div><div class="panel-body"><p>The new workflow is installed. Restart the local helper with <code>node server.mjs</code>, then reload Spindle.</p><p class="help section-gap">Wait for active runs to finish first. Saved runs are kept. If your Tiiny key is session-only, enter it again after restarting.</p></div></section>';},
@@ -20,7 +21,13 @@ const {createStudio}=await import('./studio.mjs').catch(()=>({createStudio:()=>(
 const {createWorkshops}=await import('./workshops.mjs').catch(()=>({createWorkshops:()=>({mount(element){element.innerHTML='<p class="help">Restart the helper to load the soundtrack and museum workflows.</p>';},update(){},adoptVideo(){}})}));
 const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=null,page='workbench',task='chat',selectedModel='',currentJob=null,chat=[],runs=[],saved=[],workflow={name:'Untitled workflow',steps:[]};
-let chatModel='',chatRunId=null;
+let chatModel='',chatRunId=null,chatEndpointId='',chatEndpointName='',customEndpoints=[];
+let chatProjectId='',chatProjectName='',selectedCheckpoint=null,pauseProjectMemory=false;
+const projectControls=projectModule?.createProjectControls({api,toast,activate:activateProject,activeId:()=>chatProjectId});
+if(projectControls){
+  document.body.insertAdjacentHTML('beforeend',projectModule.projectDialog);
+  projectControls.mount($('#project-dialog'));
+}
 let filters={q:'',type:'all',status:'all'},connectionInfo=null,sampleInput=null,exampleUndo=null;
 let chatStorage;try{chatStorage=window.localStorage;}catch{}
 const chatRunKey='spindle-last-chat-run';
@@ -31,7 +38,7 @@ let warmChatError=null;
 let promptDex=null;
 let meetingDesk=null;
 let runsTag='',pollPromise=null,librarySelection='';
-const deviceSections={device:'Overview',models:'Models',connection:'Connection',security:'Security & Privacy'};
+const deviceSections={device:'Tiiny overview',models:'Models',connection:'Tiiny connection',endpoints:'Custom endpoints','cloud-endpoints':'Cloud endpoints',security:'Security & Privacy'};
 const searchPages=[...document.querySelectorAll('#nav [data-page],#nav [data-open-prompt-dex]')].map(button=>({
   type:'page',id:button.dataset.page||'prompt-dex',title:button.querySelector('span').textContent,
 }));
@@ -100,8 +107,20 @@ function modelOptions(t,id,all=false){const ms=compatible(t,!all);return '<optio
 function preferred(t){return compatible(t,true).find(m=>m.loaded)?.id || compatible(t,true)[0]?.id || '';}
 function preferredChatModel(){
   const models=compatible('chat',true);
+  if(chatEndpointId){
+    if(chatEndpoint()?.models.includes(chatModel))return chatModel;
+    if(chatRunId)return '';
+    chatEndpointId='';chatEndpointName='';
+  }
   if(chatRunId&&chatModel&&!models.some(m=>m.id===chatModel))return '';
   return models.find(m=>m.id===chatModel)?.id || models.find(m=>m.loaded)?.id || models.find(m=>m.id===state.defaultChatModel)?.id || models[0]?.id || '';
+}
+function chatEndpoint(){return customEndpoints.find(p=>p.id===chatEndpointId);}
+const endpointSection=profile=>profile?.kind==='cloud'?'Cloud endpoints':'Custom endpoints';
+function chatModelOptions(){
+  return modelOptions('chat',chatEndpointId?'':selectedModel)+customEndpoints.map(p=>
+    `<optgroup label="${p.kind==='cloud'?'Cloud · ':''}${esc(p.name)}${p.needsKey?' · key needed':''}">${p.models.map(model=>
+      `<option data-endpoint="${esc(p.id)}" data-model="${esc(model)}" ${p.id===chatEndpointId&&model===selectedModel?'selected':''}>${esc(model)} · ${esc(p.name)}</option>`).join('')}</optgroup>`).join('');
 }
 function rememberChatRun(id){
   chatRunId=id;pendingChatRestore=null;
@@ -109,11 +128,39 @@ function rememberChatRun(id){
 }
 function openChatRun(run){
   rememberChatRun(run.id);
+  setChatProject(run.projectId || '');
+  selectedCheckpoint=null;pauseProjectMemory=run.memoryRequest?.paused===true;
   chatModel=run.steps[0].model;
+  chatEndpointId=run.endpointId||'';chatEndpointName=run.endpointName||'';
   chat=restoreChat(run,runs);
   chatOptions.query='';
   task='chat';page='workbench';sampleInput=null;exampleUndo=null;
   show();scrollConversation();
+}
+function setChatProject(id){
+  if(id===chatProjectId)return;
+  chatProjectId=id;chatProjectName='';selectedCheckpoint=null;pauseProjectMemory=false;
+  if(id)void projectControls?.loadName(id).then(name=>{if(id===chatProjectId){chatProjectName=name;renderProjectStatus();}}).catch(error=>toast(error.message));
+}
+function newChat(checkpoint=null){
+  chat=[];chatOptions.query='';selectedCheckpoint=checkpoint;pauseProjectMemory=false;
+  sampleInput=null;exampleUndo=null;rememberChatRun(null);currentJob=null;workbench();
+  queueMicrotask(()=>$('#prompt')?.focus());
+}
+function activateProject(id,checkpoint){
+  if(chatProjectId===id&&!checkpoint)return true;
+  if(($('#prompt')?.value.trim()||$('#chat-text-attachments')?.children.length||$('#input-file')?.files.length||sampleInput?.task==='chat'||$('#vault-attached')?.hidden===false)&&
+    !confirm('Start a fresh chat and discard the current draft and attachments?'))return false;
+  setChatProject(id);newChat(checkpoint);return true;
+}
+function renderProjectStatus(){
+  const button=$('#chat-project'),bar=$('#project-memory-status');
+  if(!bar||!button)return;
+  button.textContent=chatProjectName || (chatProjectId?'Current project':'Projects');
+  bar.hidden=!chatProjectId||!!chatEndpointId;
+  $('#project-memory-label').textContent=selectedCheckpoint?`${selectedCheckpoint.mode==='result'?'Refining':'Resuming from'} · ${selectedCheckpoint.title}`:
+    pauseProjectMemory?'Project recall paused':'Project memory on';
+  $('#toggle-project-memory').textContent=selectedCheckpoint?'Remove':pauseProjectMemory?'Turn on':'Pause';
 }
 function taskOptions(id){return Object.entries(state.tasks).map(([k,t])=>`<option value="${k}" ${id===k?'selected':''}>${esc(t.label)}</option>`).join('');}
 const studio=createStudio({api,getState:()=>state,outputHTML,onQueued:j=>{currentJob=j.id;void poll();},toast});
@@ -125,8 +172,8 @@ async function refresh(render=true){
   const b=$('#refresh');b.disabled=true;
   try{state=await api('/api/state');if(state.demo){$('#demo-notice').hidden=false;$('#demo-notice').className='demo-strip';$('#demo-notice').textContent='ILLUSTRATIVE DEMO · SYNTHETIC MODELS, USAGE AND PERFORMANCE · NO LIVE DEVICE';}$('#connection').textContent=state.offline?'Device unavailable':'Tiiny connected';$('#dot').classList.toggle('online',!state.offline);
     const loaded=state.models.filter(m=>m.loaded);const total=loaded.reduce((a,m)=>a+(m.npu || 0),0);$('#resident').textContent=loaded.length?loaded.map(m=>m.name).join(', ')+' · '+total+'% NPU reserved':'No models loaded';$('#capacity').style.width=total+'%';
-    $('#sync-time').textContent='Synced '+new Date(state.syncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-    const message=state.offline?'Showing your last inventory. '+state.error:state.storeError?'Installed models refreshed; store refresh failed. '+state.storeError:'';$('#banner').hidden=!message;$('#banner').textContent=message;
+    $('#sync-time').textContent=state.syncedAt?'Synced '+new Date(state.syncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';
+    const message=state.offline?(state.syncedAt?'Showing your last inventory. ':'')+state.error:state.storeError?'Installed models refreshed; store refresh failed. '+state.storeError:'';$('#banner').hidden=!message;$('#banner').textContent=message;
     if(render)show();
   }catch(e){$('#connection').textContent='Connection needed';$('#banner').hidden=false;$('#banner').textContent=e.message;if(!state){page='connection';connectionPage();}}
   finally{b.disabled=false;}
@@ -139,8 +186,8 @@ function renderNavigation(){
     if(selected)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
   });
   if(!inDevice)return;
-  $('#breadcrumb').textContent=page==='device'?'Device':'Device / '+deviceSections[page];
-  $('#view').insertAdjacentHTML('afterbegin',`<nav class="device-navigation" aria-label="Device sections">${Object.entries(deviceSections).map(([id,label])=>`<button type="button" data-device-section="${id}" ${page===id?'aria-current="page"':''} ${!state&&['device','models'].includes(id)?'disabled':''}>${esc(label)}</button>`).join('')}</nav>`);
+  $('#breadcrumb').textContent='Settings / '+deviceSections[page];
+  $('#view').insertAdjacentHTML('afterbegin',`<nav class="device-navigation" aria-label="Settings sections">${Object.entries(deviceSections).map(([id,label])=>`<button type="button" data-device-section="${id}" ${page===id?'aria-current="page"':''} ${!state&&['device','models'].includes(id)?'disabled':''}>${esc(label)}</button>`).join('')}</nav>`);
   document.querySelectorAll('[data-device-section]').forEach(button=>button.onclick=()=>{page=button.dataset.deviceSection;show();});
 }
 function show(){
@@ -153,6 +200,7 @@ function show(){
   document.body.classList.toggle('creating',page==='workbench');
   window.dispatchEvent(new Event('spindle:workspace'));
   if(page==='connection'){connectionPage();return;}
+  if(page==='endpoints'||page==='cloud-endpoints'){endpointsPage();return;}
   if(page==='meeting'){
     $('#breadcrumb').textContent='Meeting Desk';
     renderNavigation();
@@ -166,7 +214,7 @@ function show(){
     renderNavigation();
     libraryPage();return;
   }
-  if(!state){page='connection';connectionPage();return;}$('#breadcrumb').textContent=({dashboard:'Dashboard',workbench:'Chat & create',workflows:'Workflows',library:'Library & runs',models:'Models',device:'Device'})[page];
+  if(!state&&page!=='dashboard'){page='connection';connectionPage();return;}$('#breadcrumb').textContent=({dashboard:'Dashboard',workbench:'Chat & create',workflows:'Workflows',library:'Library & runs',models:'Models',device:'Settings'})[page];
   ({dashboard:dashboardPage,workbench:workbench,workflows:workflowPage,library:libraryPage,models:modelsPage,device:devicePage})[page]();
   renderNavigation();
 }
@@ -191,7 +239,7 @@ async function openMeetingDesk(result){
     if(result)meetingDesk.openRun(result.id,result.at);
   }
 }
-function dashboardPage(){mountDashboard($('#view'),{api,getState:()=>state,navigate:next=>{page=next;show();},toast});}
+function dashboardPage(){mountDashboard($('#view'),{api,getState:()=>state??{models:[]},navigate:next=>{page=next;show();},toast});}
 const traceNames={chat:'Tiiny inference',search:'Web search',forecast:'Weather forecast',page:'Source page',check:'Device API check'};
 const traceProviders={'https://html.duckduckgo.com':'DuckDuckGo','https://api.search.brave.com':'Brave Search','https://forecast.weather.gov':'National Weather Service','https://feeds.bbci.co.uk':'BBC News','https://www.cbsnews.com':'CBS News'};
 const traceCount=(n,singular,plural=singular+'s')=>n+' '+(n===1?singular:plural);
@@ -321,7 +369,7 @@ function securityPage(){
 function fileField(label='Reference image',accept='image/*'){return `<label class="field"><span>${label}</span><input id="input-file" type="file" accept="${accept}"></label>`;}
 function extraFields(){
   if(task==='image')return fileField('Reference image · optional')+'<p class="help">Reference-image support varies by model. Inspect runtime defaults before choosing settings.</p>';
-  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to ${AMPLE_RESPONSE_TOKENS.toLocaleString()} output tokens, capped at half the reported context to leave room for input. With no reported context, Ample requests 32,768. Thinking can share this allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web when useful</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The selected provider receives your explicit query or a short query Tiiny creates from your current message. With text files attached, enter a separate query to use search. Conversation history, attachments, and your Tiiny key stay within your local setup. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to let Tiiny decide when to search"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. If search is unavailable or the query is too long, Tiiny can still reply. Spindle labels replies without web sources.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
+  if(task==='chat')return `<div class="chat-controls"><label class="field"><span>Maximum response tokens</span><select id="response-limit">${[['ample','Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens'],['default','Runtime default / Advanced JSON'],['4096','4,096 tokens'],['8192','8,192 tokens'],['16384','16,384 tokens · more room for thinking'],['32768','32,768 tokens'],['custom','Custom limit…']].map(([value,label])=>`<option value="${value}" ${chatOptions.responseLimit===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="field" id="custom-token-field" ${chatOptions.responseLimit==='custom'?'':'hidden'}><span>Custom maximum response tokens</span><input id="custom-tokens" ${chatOptions.responseLimit==='custom'?'':'disabled'} type="number" min="1" step="1" value="${esc(chatOptions.customTokens)}"></label><p class="help">Ample requests up to ${AMPLE_RESPONSE_TOKENS.toLocaleString()} output tokens, capped at half the reported context to leave room for input. With no reported context, Ample requests 32,768. Thinking can share this allowance. Runtime default / Advanced JSON leaves the choice to your device or your JSON settings. Other selections override JSON token limits. Device output and context limits still apply.</p><p class="help" id="response-context"></p><div class="field-row"><label class="field"><span>Thinking mode</span><select id="thinking-mode"></select></label><label class="field"><span>Reasoning effort</span><select id="reasoning-effort"></select></label></div><p class="help" id="thinking-note"></p><label class="checkline"><input id="stream-chat" type="checkbox" ${chatOptions.stream?'checked':''}> Show the response as it arrives</label><label class="checkline"><input id="web-search" type="checkbox" ${chatOptions.search?'checked':''}> Search the web when useful</label><div id="web-options" ${chatOptions.search?'':'hidden'}><p class="notice">WEB SEARCH LEAVES YOUR LOCAL SETUP. The selected provider receives your explicit query or a short query based on your current message. With text files attached, enter a separate query to use search. Conversation history, attachments, and your Tiiny key stay within your local setup. Queries and results are saved in your local run history.</p><label class="field"><span>Search provider</span><select id="search-provider"><option value="duckduckgo" ${chatOptions.provider==='duckduckgo'?'selected':''}>DuckDuckGo · no key · best effort</option><option value="brave" ${chatOptions.provider==='brave'?'selected':''}>Brave Search · API key required</option></select></label><label class="field"><span>Search query · optional, up to 500 characters</span><input id="web-query" maxlength="500" value="${esc(chatOptions.query)}" placeholder="Leave blank to search automatically"></label><p class="help">Search supplies up to five results. For U.S. weather, Spindle can send a city and state or ZIP code to the National Weather Service to get a recent forecast. If search is unavailable or the query is too long, Tiiny can still reply. Spindle labels replies without web sources.</p><details><summary>Brave Search API key · session only</summary><label class="field"><span>Separate from your Tiiny API key</span><input id="search-key" type="password" autocomplete="off" placeholder="Paste a Brave Search API key"></label><div class="actions"><button class="button" type="button" id="save-search-key">Use key for this server session</button><button class="button quiet" type="button" id="clear-search-key">Forget search key</button></div><p class="help" id="search-key-status">The key stays in server memory until forgotten or the helper restarts. It is never saved in runs, workflows, or browser storage.</p></details></div></div>`+fileField('Attach an image · optional');
   if(task==='asr')return fileField('Recording · WAV, MP3, M4A, WebM, and more','audio/*')+'<p class="help">Converted locally for Tiiny. Use a clear recording under 40 MiB and up to 15 minutes.</p>';
   if(task==='video')return fileField('Starting image · optional')+'<label class="checkline"><input type="checkbox" id="video-preview" checked> Short preview · overrides duration and size on supported models</label>'+'<div class="field-row"><label class="field"><span>Duration · seconds, optional</span><input id="seconds" type="number" min="1" placeholder="Model default"></label><label class="field"><span>Size · optional</span><input id="size" placeholder="Model default"></label></div>';
   if(task==='speech')return `<label class="field"><span>Voice ID · optional, model-specific</span><input id="voice" placeholder="Use the model’s default voice"></label>
@@ -346,10 +394,11 @@ function workbench(){
   if(isChat)selectedModel=preferredChatModel();
   else if(!compatible(task,true).some(m=>m.id===selectedModel))selectedModel=preferred(task);
   const hasVault=isChat&&!state.demo&&vaultAttachment;
+  const hasProjects=isChat&&!state.demo&&projectControls;
   const titles={chat:'What’s on your mind?',image:'Picture something new.',asr:'Make every word useful.',speech:'Give your words a voice.',music:'Find your next sound.',video:'Set your ideas in motion.',ocr:'A clearer view of your documents.',mesh:'Give an image a new dimension.',decision:'Find the right direction.',embed:'Find meaning in your text.',rerank:'Bring the best match forward.'};
   const action=isChat?'Send':({image:'Create image',asr:'Transcribe',speech:'Create speech',music:'Create music',video:'Create video',ocr:'Read document',mesh:'Create 3D object',decision:'Evaluate',embed:'Create embeddings',rerank:'Rank documents'})[task];
   $('#view').innerHTML=`<section class="creation-workspace${isChat?' chat-workspace':''}" aria-label="${esc(label)} workspace">
-    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" id="enter-focus">Focus</button><button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}</div></div>
+    <div class="workspace-toolbar"><label class="mode-picker"><span class="sr-only">What do you want to create?</span><select id="workspace-mode">${taskOptions(task)}</select></label><div class="actions"><button class="button quiet" data-guide="task" aria-label="Tips and examples for ${esc(label)}">? <span class="toolbar-label">Tips & examples</span></button>${isChat?'<button class="button quiet" type="button" id="enter-focus">Focus</button><button class="button quiet" type="button" data-open-prompt-dex>PromptDex</button><button class="button quiet" id="new-chat" type="button">＋ New chat</button>':''}${hasProjects?'<button class="button quiet" id="chat-project" type="button" aria-haspopup="dialog">Projects</button>':''}</div></div>
     <div class="conversation" id="conversation"><div class="workspace-welcome" id="workspace-welcome"><span class="welcome-spark" aria-hidden="true">✳</span><h1>${titles[task]}</h1><p>${esc(descriptions[task])}</p><div class="starter-prompts">${guides[task].examples.slice(0,4).map((e,i)=>`<button type="button" class="example-chip" data-example="${i}">${esc(e.label)} <span aria-hidden="true">↗</span></button>`).join('')}</div></div>
     <div id="chat-history" class="chat-history" role="log" aria-label="Conversation"></div>
     <section class="workspace-result" id="workspace-result" aria-label="Result" hidden><div class="result-status"><span id="output-status" role="status">Ready</span></div><div class="output-area" id="output" aria-live="polite"></div></section></div>
@@ -360,22 +409,33 @@ function workbench(){
     </section>`:''}
     ${isChat?'<div class="focus-compose-actions"><button class="button quiet" id="focus-compose" type="button" aria-expanded="false" aria-controls="task-form">Write</button></div>':''}
     <form id="task-form" class="creation-composer"><div id="action-error" role="alert"></div><div class="composer-surface">
-    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog"><span class="chat-wide-label">Attach from </span>Vault</button>':''}</div>
+    <div class="composer-top"><label class="composer-model"><span class="sr-only">Model</span><select id="model" aria-label="Model">${isChat?chatModelOptions():modelOptions(task,selectedModel)}</select><span class="composer-model-progress" aria-hidden="true" hidden></span></label>${['chat','image','video'].includes(task)?'<button class="button quiet" id="attach-image" type="button" aria-label="Attach an image">＋ <span>Image</span></button>':''}${hasVault?'<button class="button quiet" id="attach-vault" type="button" aria-haspopup="dialog"><span class="chat-wide-label">Attach from </span>Vault</button>':''}</div>
     ${isChat?'<input id="chat-text-files" type="file" multiple hidden><ul id="chat-text-attachments" aria-label="Attached text files" hidden></ul><div id="chat-attachment-status" class="sr-only" role="status"></div>':''}
     <div id="model-load-status" class="model-load-status" role="status"><span class="spinner" aria-hidden="true" hidden></span><span></span></div>
     ${hasVault?'<div id="vault-attached" hidden><span></span><button class="button quiet" type="button" aria-label="Remove Vault excerpt">×</button></div>':''}
+    ${hasProjects?'<div id="project-memory-status" class="small muted" hidden><span id="project-memory-label" role="status"></span> <button type="button" class="text-button" id="toggle-project-memory"></button></div>':''}
     ${!fileOnly?`<div class="prompt-row"><label class="field prompt-field"><span class="sr-only">${task==='speech'?'Text to speak':task==='rerank'?'Search query':task==='decision'?'State to evaluate':'Prompt'}</span><textarea id="prompt" rows="${isChat?1:2}" placeholder="${esc(isChat?'Ask anything…':descriptions[task])}" ${isChat?'':'required'}></textarea></label><button class="button quiet copy-button" id="copy-draft" type="button" disabled>Copy prompt</button></div>`:'<details class="input-disclosure" open><summary>Choose the input file</summary>'+extraFields()+'</details>'}
     ${task==='rerank'?extraFields():''}<div id="sample-status" class="sample-status" role="status"></div><div id="example-undo"></div>
-    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit">${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit" aria-label="Send to Tiiny only"><span class="chat-wide-label">Send to </span>Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
+    <div class="chat-send-row"><button class="button primary" id="run-task" type="submit" ${isChat?'aria-keyshortcuts="Control+Enter Meta+Enter" title="Send · Ctrl+Enter or ⌘+Enter"':''}>${action} <span aria-hidden="true">↑</span></button>${isChat?'<button class="button quiet" id="send-tiiny-only" type="submit" aria-label="Send to Tiiny only"><span class="chat-wide-label">Send to </span>Tiiny only</button><span class="small muted" id="chat-quick-status"></span>':'<span class="small muted">Model defaults · saved locally</span>'}</div></div>
+    ${isChat?'<p id="chat-endpoint-notice" class="chat-search-notice search-enabled" role="note" hidden></p>':''}
     ${isChat?'<p id="chat-search-notice" class="chat-search-notice" role="note"></p>':''}
     ${isChat?'<div class="focus-run-bar"><span class="small muted" data-focus-run-status role="status"></span><button class="button danger" id="focus-stop" type="button" hidden>Stop run</button></div>':''}
     <details id="${isChat?'chat':'creation'}-options" class="chat-options"><summary><span>${isChat?'Chat':esc(label)} options</span><span class="small muted">${isChat?'Search, thinking & more':'Fine-tune your result'}</span></summary><div class="chat-options-body"><div class="model-note" id="model-note"></div><button class="text-button model-help" type="button" data-guide="essentials">About this model →</button>
     ${isChat?`<label class="field"><span>Default chat model</span><select id="default-chat-model"><option value="">No default</option>${compatible('chat',true).map(m=>`<option value="${esc(m.id)}" ${m.id===state.defaultChatModel?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label><p class="help" id="default-chat-status" role="status">Loads when Chat opens on an idle, empty device.</p>`:''}
     ${isChat||!fileOnly&&task!=='rerank'?extraFields():''}
     <details><summary>Advanced settings</summary><p class="help">Optional. Leave {} for model defaults. Add settings only when the selected model supports them.</p><textarea id="params" aria-label="Advanced JSON parameters">${task==='decision'?JSON.stringify({questions:{route:{type:'choice',instructions:'Which team should handle this?',criteria:{general:null,technical:null,billing:null}}}},null,2):'{}'}</textarea></details>
-    ${isChat?'<p id="chat-device-notice" class="help privacy-inline"></p>':''}<p class="help privacy-inline">${isChat?'Model switching can affect other clients.':'Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.'}</p><label class="checkline"><input id="auto-model" type="checkbox" checked> ${isChat?'Switch models if needed and keep the chat model loaded.':'Switch models if needed, then restore my loaded models.'}</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
+    ${isChat?'<p id="chat-device-notice" class="help privacy-inline"></p>':''}<p id="model-switch-notice" class="help privacy-inline">${isChat?'Model switching can affect other clients.':'Runs save prompts and outputs locally. Model switching can affect other clients; use an idle device.'}</p><label class="checkline"><input id="auto-model" type="checkbox" checked> ${isChat?'Switch models if needed and keep the chat model loaded.':'Switch models if needed, then restore my loaded models.'}</label><div class="actions"><button class="button" id="add-workflow" type="button">＋ Add to workflow</button><button class="button quiet" id="check-model" type="button">Test capability</button>${['image','video','music','mesh'].includes(task)?'<button class="button quiet" id="runtime" type="button">Runtime info</button>':''}</div>
     </div></details></form>${hasVault?vaultAttachment.vaultDialogHTML:''}</section>`;
   const vault=hasVault?vaultAttachment.bindVaultAttachment({api,dialog:$('#vault-dialog'),open:$('#attach-vault'),attached:$('#vault-attached'),onChange:chatOptionsStatus}):null;
+  if(hasProjects){
+    bind('#chat-project','click',()=>projectControls.open());
+    bind('#toggle-project-memory','click',()=>{
+      if(selectedCheckpoint)selectedCheckpoint=null;
+      else pauseProjectMemory=!pauseProjectMemory;
+      renderProjectStatus();
+    });
+    renderProjectStatus();
+  }
   $('#breadcrumb').textContent='Chat & create';
   bind('#workspace-mode','change',e=>{task=e.target.value;sampleInput=null;exampleUndo=null;selectedModel=preferred(task);currentJob=null;workbench();});
   bind('#enter-focus','click',()=>setFocusMode(true,true));
@@ -386,6 +446,12 @@ function workbench(){
   bind('#attach-image','click',()=>$('#input-file').click());
   if(isChat){
     const form=$('#task-form'),prompt=$('#prompt'),picker=$('#chat-text-files');
+    prompt.addEventListener('keydown',event=>{
+      if(event.key!=='Enter'||!(event.ctrlKey||event.metaKey)||event.shiftKey||event.altKey||event.isComposing||event.keyCode===229)return;
+      event.preventDefault();
+      const send=form.querySelector('#run-task');
+      if(!event.repeat&&!send.disabled)form.requestSubmit(send);
+    });
     const list=$('#chat-text-attachments'),status=$('#chat-attachment-status');
     const attachButton=document.createElement('button');
     attachButton.className='button quiet';
@@ -442,29 +508,53 @@ function workbench(){
     };
   }
   renderSampleStatus();
-  bind('#model','change',e=>{selectedModel=e.target.value;if(task==='chat'){chatModel=selectedModel;chat=[];vault?.clear();rememberChatRun(null);currentJob=null;renderChatStats(null);$('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);}renderChat();modelNote();renderModelLoad();});modelNote();renderChat();renderModelLoad();
+  bind('#model','change',e=>{
+    const option=e.target.selectedOptions[0];
+    selectedModel=option?.dataset.model??e.target.value;
+    if(isChat){
+      const nextEndpoint=option?.dataset.endpoint||'';
+      if(nextEndpoint!==chatEndpointId){
+        $('#input-file').value='';sampleInput=null;exampleUndo=null;
+        selectedCheckpoint=null;chatOptions.query='';$('#web-query').value='';
+      }
+      chatEndpointId=nextEndpoint;chatEndpointName=chatEndpoint()?.name||'';
+      chatModel=selectedModel;chat=[];vault?.clear();rememberChatRun(null);currentJob=null;renderChatStats(null);
+      $('#workspace-result').hidden=true;$('#output').innerHTML='';disableSend($('#task-form'),false);
+      renderProjectStatus();renderSampleStatus();
+    }
+    renderChat();modelNote();renderModelLoad();
+  });modelNote();renderChat();renderModelLoad();
   bind('#input-file','change',()=>{sampleInput=null;renderSampleStatus();});
   if(task==='chat')bindChatControls();
-  bind('#new-chat','click',()=>{chat=[];chatOptions.query='';rememberChatRun(null);currentJob=null;workbench();});
+  bind('#new-chat','click',()=>newChat());
   bind('#task-form','submit',async e=>{
     e.preventDefault();const form=e.currentTarget,button=form.querySelector('#run-task');if(button.disabled)return;
-    const tiinyOnly=e.submitter?.id==='send-tiiny-only';
+    const endpointId=isChat?chatEndpointId:'',endpointName=chatEndpoint()?.name||chatEndpointName;
+    const tiinyOnly=!endpointId&&e.submitter?.id==='send-tiiny-only';
     const vaultReference=vault?.reference;
     const prompt=form.querySelector('#prompt'),input=prompt?.value || '',attachments=[...textAttachments];
     const conversation=chat,previousChatRunId=chatRunId;
+    const projectId=chatProjectId,checkpoint=selectedCheckpoint;
+    const memoryRequest=checkpoint?{checkpointId:checkpoint.checkpointId,mode:checkpoint.mode}:{paused:pauseProjectMemory};
     const messages=isChat?chat.map(({role,content,attachments})=>({role,content:chatAttachmentText(content,attachments)})):[],switchModels=form.querySelector('#auto-model').checked;
     disableSend(form,true);
     try{
       if(readingAttachments)throw Error('Wait for the text files to finish attaching.');
       const s=await getStep(true,tiinyOnly),chatStep=s.task==='chat';
+      const submittedSearchQuery=s.params._spindleWebSearch?.query;
       if(chatStep&&!input.trim()&&!attachments.length)throw Error('Enter a prompt or attach a text file.');
-      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages,...(attachments.length?{attachments}:{})}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(chatStep&&previousChatRunId?{previousChatRunId}:{}),...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{})});
+      const j=await api('/api/run',{name:state.tasks[s.task].label,input:chatStep?'':input,steps:[{...s,...(chatStep?{prompt:input,promptMode:'literal',messages,...(attachments.length?{attachments}:{})}:{prompt:'{{input}}'})}],switchModels,keepChatModel:chatStep,...(chatStep&&previousChatRunId?{previousChatRunId}:{}),...(endpointId?{endpointId}:{...(tiinyOnly?{tiinyOnly:true}:{}),...(vaultReference?{vaultReference}:{}),...(chatStep&&projectId?{projectId,memoryRequest}:{})})});
       if(chatStep&&conversation===chat){
         rememberChatRun(j.id);chatModel=s.model;
+        if(selectedCheckpoint===checkpoint){selectedCheckpoint=null;renderProjectStatus();}
+        if(projectId&&!tiinyOnly&&submittedSearchQuery&&chatOptions.query===submittedSearchQuery){
+          chatOptions.query='';
+          if($('#web-query'))$('#web-query').value='';
+        }
         chat.push({role:'user',content:input,attachments,vaultSource:vaultReference?.name});
       }
-      if(form!==$('#task-form')){toast('Your run is queued. Follow it in Library & runs.');return;}
-      currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for your Tiiny…</p></div>';
+      if(form!==$('#task-form')||chatStep&&conversation!==chat){toast('Your run is queued. Follow it in Library & runs.');return;}
+      currentJob=j.id;$('#action-error').innerHTML='';$('#workspace-result').hidden=false;$('#workspace-welcome').hidden=true;$('#output-status').textContent='Queued';$('#output').innerHTML='<div class="working-message"><span class="spinner"></span><p>Waiting for '+esc(endpointId?endpointName:'your Tiiny')+'…</p></div>';
       if(chatStep){
         if(document.body.classList.contains('focus-mode')){
           setFocusWriting(false);
@@ -520,7 +610,7 @@ function disableSend(form,disabled){
 }
 async function warmDefaultChat(){
   const id=state.defaultChatModel;
-  if(!id||selectedModel!==id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
+  if(chatEndpointId||!id||selectedModel!==id||warmingChatModel||state.offline||state.models.some(m=>m.loaded)||!compatible('chat',true).some(m=>m.id===id)||runs.some(r=>['queued','running'].includes(r.status)))return;
   warmingChatModel=id;
   warmChatError=null;
   renderModelLoad();
@@ -539,7 +629,7 @@ function renderModelLoad(){
   const load=runs.find(run=>run.status==='running'&&run.modelLoad)?.modelLoad || (warmingChatModel?{id:warmingChatModel,ready:false}:null);
   const models=new Map(compatible(task,true).map(model=>[model.id,model]));
   for(const option of picker.options){
-    const model=models.get(option.value);
+    const model=option.dataset.endpoint?null:models.get(option.value);
     if(!model)continue;
     const status=load?.id===model.id?(load.ready?'loaded':'loading…'):undefined;
     const label=modelLabel(model,status);
@@ -548,6 +638,7 @@ function renderModelLoad(){
   const model=state.models.find(model=>model.id===load?.id);
   $('.composer-model-progress').hidden=!load||load.ready||picker.value!==load.id;
   const status=$('#model-load-status');
+  status.hidden=task==='chat'&&!!chatEndpointId;
   const name=model?.name||load?.id;
   const error=task==='chat'&&warmChatError?.id===picker.value?warmChatError:null;
   const announcement=load?(load.ready?name+' loaded.':'Loading '+name+'…'):error?'Default model could not load. See Chat options.':'';
@@ -555,7 +646,23 @@ function renderModelLoad(){
   if(status.lastElementChild.textContent!==announcement)status.lastElementChild.textContent=announcement;
   status.title=error?.message||'';
 }
-function modelNote(){const m=state.models.find(m=>m.id===selectedModel);$('#model-note').innerHTML=m?`${m.loaded?'<span class="pill live">Loaded</span>':'<span class="pill warn">Will load for this run</span>'} &nbsp; ${esc(m.npu??'?')}% NPU · ${fmtSize(m.size)}${m.thinking?.supported?' · reasoning supported':''}`:'No compatible downloaded model. Explore Device → Models to download one.';if(task==='chat'){thinkingControls();chatOptionsStatus();}if(task==='speech'){$('#voice-reference').hidden=!voiceCloneModel(m);renderSampleStatus();}}
+function modelNote(){
+  const external=task==='chat'&&!!chatEndpointId,endpoint=external?chatEndpoint():null;
+  const m=!external&&state.models.find(m=>m.id===selectedModel);
+  $('#model-note').innerHTML=external?(endpoint?.needsKey?'Enter the API key again in Settings → '+endpointSection(endpoint)+'.':!selectedModel?'This endpoint or model is unavailable. Choose a model to start a new chat.':(endpoint.kind==='cloud'?'Cloud endpoint · ':'Custom endpoint · ')+esc(endpoint.name)):m?`${m.loaded?'<span class="pill live">Loaded</span>':'<span class="pill warn">Will load for this run</span>'} &nbsp; ${esc(m.npu??'?')}% NPU · ${fmtSize(m.size)}${m.thinking?.supported?' · reasoning supported':''}`:'Choose a model in Settings.';
+  if(task==='chat'){
+    thinkingControls();
+    for(const selector of ['#attach-image','#attach-vault','#chat-project','#default-chat-status','#model-switch-notice','#add-workflow','#check-model','#thinking-note','.model-help']){
+      const element=$(selector);if(element)element.hidden=external;
+    }
+    for(const [selector,parent] of [['#default-chat-model','label'],['#thinking-mode','.field-row'],['#auto-model','label'],['#web-search','label'],['#input-file','label']]){
+      const element=$(selector)?.closest(parent);if(element)element.hidden=external;
+    }
+    $('#response-limit').options[0].textContent=external?'Ample · use endpoint default':'Ample · up to '+AMPLE_RESPONSE_TOKENS.toLocaleString()+' tokens';
+    chatOptionsStatus();
+  }
+  if(task==='speech'){$('#voice-reference').hidden=!voiceCloneModel(m);renderSampleStatus();}
+}
 function thinkingControls(){
   const mode=$('#thinking-mode'),effort=$('#reasoning-effort');if(!mode||!effort)return;
   const m=state.models.find(m=>m.id===selectedModel),toggle=m?.thinking?.toggleable,levels=m?.reasoningLevels || [];
@@ -566,18 +673,31 @@ function thinkingControls(){
   $('#thinking-note').textContent=(toggle?'Choose how this model reasons. ':m?.thinking?.supported?'This model reports reasoning with no switch. ':'No thinking toggle reported by this model. ')+'Any reasoning returned by the runtime appears in a collapsible Thinking panel. Some models return only an answer.';
 }
 function chatOptionsStatus(){
+  const endpointNotice=$('#chat-endpoint-notice');
+  if(!endpointNotice)return;
+  const endpoint=chatEndpoint(),external=!!chatEndpointId,attachedText=$('#chat-text-attachments')?.hidden===false;
+  const [searchNotice,deviceNotice,localSend]=['#chat-search-notice','#chat-device-notice','#send-tiiny-only'].map($);
+  endpointNotice.hidden=!external;
+  deviceNotice.hidden=external;
+  $('#web-options').hidden=external||!chatOptions.search;
+  if(external){
+    const defaultLimit=['default','ample'].includes(chatOptions.responseLimit);
+    $('#chat-quick-status').textContent='Web search off · '+(defaultLimit?'endpoint default':Number(chatOptions.responseLimit==='custom'?chatOptions.customTokens:chatOptions.responseLimit).toLocaleString()+' output tokens');
+    searchNotice.hidden=localSend.hidden=true;
+    const keyNotice=endpoint?.needsKey?'Re-enter its key in Settings before sending. ':endpoint?.keyPresent?'Only this endpoint receives its API key. ':'';
+    endpointNotice.textContent=!endpoint||!selectedModel?'This endpoint or model is unavailable. Choose a model to start a new chat.':`Send shares your prompt${chat.length?', earlier turns':''}${attachedText?', attached text':''} with ${endpoint.name} (${new URL(endpoint.url).host})${endpoint.url.startsWith('http:')?' over unencrypted HTTP':''}. ${keyNotice}Runs save locally.`;
+    $('#response-context').textContent='This endpoint may set its own output and context limits.';
+    return;
+  }
   const model=state.models.find(m=>m.id===selectedModel),budget=chatOptions.responseLimit==='ample'?ampleResponseTokens(model).toLocaleString():chatOptions.responseLimit==='default'?'runtime default':Number(chatOptions.responseLimit==='custom'?chatOptions.customTokens:chatOptions.responseLimit).toLocaleString();
-  const attachedText=$('#chat-text-attachments')?.hidden===false;
   const explicitQuery=!!chatOptions.query.trim();
   const paused=chatOptions.search&&attachedText&&!explicitQuery;
   if($('#chat-quick-status'))$('#chat-quick-status').textContent=(paused?'Web search paused':chatOptions.search?'Web search on':'Web search off')+' · '+budget+(chatOptions.responseLimit==='default'?'':' output tokens');
-  const searchNotice=$('#chat-search-notice'),deviceNotice=$('#chat-device-notice'),localSend=$('#send-tiiny-only');
-  if(!searchNotice)return;
   localSend.hidden=!chatOptions.search;
   const provider=chatOptions.provider==='brave'?'Brave Search':'DuckDuckGo';
   searchNotice.classList.toggle('search-enabled',chatOptions.search);
   searchNotice.hidden=!chatOptions.search;
-  searchNotice.textContent=paused?'Search is paused for this message. Enter a separate search query in Chat options to use the web with text attachments.':chatOptions.search?`Send ${explicitQuery?'shares your search query':'may share a query Tiiny generates from this message'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.${explicitQuery?'':' Headline lookups may fetch public publisher feeds.'}`:'';
+  searchNotice.textContent=paused?'Search is paused for this message. Enter a separate search query in Chat options to use the web with text attachments.':chatOptions.search?`Send ${explicitQuery?'shares your search query':'may share a search query based on this message'} with ${provider} over HTTPS. Weather lookups may share a location with the National Weather Service.${explicitQuery?'':' Headline lookups may fetch public publisher feeds.'}`:'';
   const deviceData=['this prompt',...(chat.length?['earlier turns']:[]),...(attachedText?['the attached text']:[]),...($('#input-file')?.files.length||sampleInput?.task==='chat'?['the attached image']:[]),...($('#vault-attached')?.hidden===false?['the Vault excerpt']:[]),'the Tiiny API key'];
   const transport=connectionInfo?.endpoint?.startsWith('http:')?' over unencrypted HTTP':connectionInfo?.endpoint?.startsWith('https:')?' over HTTPS':'';
   deviceNotice.textContent=`Tiiny gets ${deviceData.slice(0,-1).join(', ')} and ${deviceData.at(-1)}${transport}. ${chatOptions.search&&!paused?'Search results go to Tiiny when used. ':''}Runs save locally.`;
@@ -589,7 +709,7 @@ function bindChatControls(){
     select.disabled=true;
     try{
       await api('/api/chat/default',{model});state.defaultChatModel=model;
-      if(page==='workbench'&&task==='chat'&&select===$('#default-chat-model')&&!chat.length&&!currentJob){
+      if(page==='workbench'&&task==='chat'&&!chatEndpointId&&select===$('#default-chat-model')&&!chat.length&&!currentJob){
         selectedModel=preferredChatModel();$('#model').value=selectedModel;modelNote();renderModelLoad();
       }
       status.textContent=model?'Default model saved.':'Default model cleared.';
@@ -665,15 +785,24 @@ function setFocusWriting(writing,moveFocus=false){
 function textAttachmentDetails(files=[]){
   return files.map(({name,text})=>`<details class="chat-text-detail"><summary>${esc(name)}</summary><pre><code>${esc(text).replaceAll('\r','&#13;')}</code></pre><button class="button quiet" type="button" data-download-text="${esc(name)}">Download text</button></details>`).join('');
 }
+const renderedChatMessages=new WeakMap();
 function renderChat(){
   const history=$('#chat-history');
   if(!history)return;
-  history.innerHTML=task==='chat'?chat.map(message=>{
+  const messages=task==='chat'?chat:[],previous=renderedChatMessages.get(history)||[];
+  let shared=0;
+  while(shared<previous.length&&previous[shared]===messages[shared])shared++;
+  while(history.children.length>shared)history.lastElementChild.remove();
+  history.insertAdjacentHTML('beforeend',messages.slice(shared).map(message=>{
     const user=message.role==='user';
     return `<article class="chat-message ${user?'from-user':'from-assistant'}"><strong>${user?'You':'Spindle'}</strong>${message.vaultSource?'<div class="small muted">Vault · '+esc(message.vaultSource)+'</div>':''}
       ${user?(message.content?'<div class="output-text">'+esc(typeof message.content==='string'?message.content:'[Image message]')+'</div>':'')+textAttachmentDetails(message.attachments):chatDetails(message,'before')+chatMarkdown(message.content)+chatDetails(message,'sources')}
-      ${copyButton(message.content,user?'prompt':'reply')}${user?'':appPreviewButton({task:'chat',text:message.content,finishReason:message.finishReason},message.runId,message.step)}</article>`;
-  }).join(''):'';
+      ${copyButton(message.content,user?'prompt':'reply')}${user?'':appPreviewButton({task:'chat',text:message.content,finishReason:message.finishReason},message.runId,message.step)}
+      ${projectControls&&!chatEndpointId&&!state.demo&&!user&&message.content?.trim()?`<button type="button" class="button quiet" data-save-checkpoint="${esc(message.runId)}">Save checkpoint</button>`:''}
+      ${projectControls&&message.recalledMemory?.length?`<div class="small muted project-memory-used">Used memory ${message.recalledMemory.map(item=>`<button type="button" class="text-button" data-show-checkpoint="${esc(item.id)}" data-checkpoint-project="${esc(message.projectId)}">${esc(item.title)}</button>`).join(' ')}</div>`:''}
+      ${message.memoryWarning?`<p class="small muted">${esc(message.memoryWarning)}</p>`:''}</article>`;
+  }).join(''));
+  renderedChatMessages.set(history,[...messages]);
   if(task==='chat')$('#workspace-welcome').hidden=chat.length>0||!$('#workspace-result').hidden;
 }
 let statsJob=null;
@@ -695,7 +824,7 @@ function renderChatStats(job){
   statsJob=job?.steps?.length===1&&job.steps[0].task==='chat'?job:null;
   panel.hidden=!statsJob;
   if(!statsJob)return;
-  const {tokens,percent,ratio,estimated,context,used,rate,cache}=chatRunStats(job,state.models.find(m=>m.id===job.steps[0].model));
+  const {tokens,percent,ratio,estimated,context,used,rate,cache}=chatRunStats(job,job.endpointId?undefined:state.models.find(m=>m.id===job.steps[0].model));
   const meter=panel.querySelector('progress');
   meter.hidden=ratio==null;
   if(!meter.hidden){
@@ -703,14 +832,14 @@ function renderChatStats(job){
     meter.setAttribute('aria-valuetext',`${estimated?'Estimated ':''}${used.toLocaleString()} of ${context.toLocaleString()} tokens, ${percent}`);
   }
   panel.querySelector('[data-chat-context]').textContent='Context '+tokens;
-  panel.querySelector('[data-chat-context]').title=estimated?'Estimated from request and response text. Tiiny can report exact usage later.':'Context use and capacity reported by Tiiny';
+  panel.querySelector('[data-chat-context]').title=estimated?'Estimated from request and response text. The runtime can report exact usage later.':'Context use and capacity reported by the runtime';
   panel.querySelector('[data-chat-percent]').textContent=ratio==null?'':percent;
   panel.querySelector('[data-chat-rate]').textContent='Speed '+rate;
   const cacheStat=panel.querySelector('[data-chat-cache]');
   cacheStat.textContent='Cache hit '+cache;
-  cacheStat.title=cache!=='—'?'Prompt tokens Tiiny reports reusing from its cache.'
-    :['queued','running'].includes(job.status)?'Waiting for cache usage from Tiiny. Some firmware only reports it at the end.'
-    :'Tiiny did not report prompt-cache usage for this run.';
+  cacheStat.title=cache!=='—'?'Prompt tokens the runtime reports reusing from its cache.'
+    :['queued','running'].includes(job.status)?'Cache usage may only be available after the run finishes.'
+    :'The runtime did not report prompt-cache usage for this run.';
   panel.querySelector('.spinner').hidden=!['queued','running'].includes(job.status);
   renderChatClock();
 }
@@ -729,9 +858,13 @@ async function getStep(requireFile=true,tiinyOnly=false){
   if(stepTask==='music'&&$('#lyrics')?.value)params.lyrics=$('#lyrics').value;
   if(stepTask==='video'){if($('#video-preview')?.checked)params._spindlePreview=true;if($('#seconds')?.value)params.seconds=Number($('#seconds').value);if($('#size')?.value)params.size=$('#size').value;}
   if(stepTask==='chat'){
-    params=withResponseLimit(params,chatOptions.responseLimit,chatOptions.customTokens,state.models.find(m=>m.id===model));
-    params._spindleThinking=chatOptions.thinking;params._spindleEffort=chatOptions.effort;params._spindleStream=chatOptions.stream;
-    params._spindleWebSearch=tiinyOnly?{enabled:false}:{enabled:chatOptions.search,provider:chatOptions.provider,query:chatOptions.query};
+    const endpoint=chatEndpoint(),external=!!chatEndpointId;
+    if(external&&!endpoint?.models.includes(model))throw Error('Choose an available model from Settings → '+endpointSection(endpoint)+'.');
+    if(endpoint?.needsKey)throw Error('Enter the API key again in Settings → '+endpointSection(endpoint)+'.');
+    const limit=external&&chatOptions.responseLimit==='ample'?'default':chatOptions.responseLimit;
+    params=withResponseLimit(params,limit,chatOptions.customTokens,external?undefined:state.models.find(m=>m.id===model));
+    params._spindleThinking=external?'auto':chatOptions.thinking;params._spindleEffort=external?'auto':chatOptions.effort;params._spindleStream=chatOptions.stream;
+    params._spindleWebSearch=tiinyOnly||external?{enabled:false}:{enabled:chatOptions.search,provider:chatOptions.provider,query:chatOptions.query};
   }
   const documents=$('#documents')?.value.split('\n').filter(Boolean);
   const reference=stepTask==='speech'?fileInput?.files[0]:null;
@@ -767,7 +900,8 @@ function outputHTML(out,{partial=false}={}) {
 }
 function renderCurrent(j){
   if(!$('#output'))return;
-  const follow=followsLatest($('#conversation')),pending=['queued','running'].includes(j.status);
+  const conversation=$('#conversation'),pending=['queued','running'].includes(j.status);
+  const follow=followsLatest(conversation)&&![...conversation.querySelectorAll('[data-reasoning][open]')].some(panel=>panel.getClientRects().length);
   const status=(j.status==='running'&&j.phase?j.phase:j.status)+(j.progress!=null?' · '+j.progress+'%':'');
   disableSend($('#task-form'),pending);
   $('#output-status').textContent=status;
@@ -778,14 +912,19 @@ function renderCurrent(j){
   }
   renderChatStats(j);
   let completedAnswer=false;
-  $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=task==='chat'&&j.id===chatRunId&&j.status==='completed';
   const output=$('#output');
+  const liveThinking=output.querySelector('[data-chat-live-details] [data-reasoning][open]');
+  const finishingChat=task==='chat'&&j.id===chatRunId&&j.status==='completed';
+  const readingOffset=finishingChat&&liveThinking?liveThinking.getBoundingClientRect().top:null;
+  const focusedThinking=liveThinking?.contains(document.activeElement);
+  $('#workspace-welcome').hidden=true;$('#workspace-result').hidden=finishingChat;
   const livePartial=j.partial?.task==='chat';
   const partial=livePartial?outputHTML({task:'chat',model:j.partial.model},{partial:true}):j.partial?outputHTML(j.partial,{partial:true}):'';
-  const shell=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+partial+(j.error?recoveryHTML(j.error,j.audioFailure):'')+(['queued','running'].includes(j.status)?'<div class="working-message"><span class="spinner"></span><p>Your Tiiny is working…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
+  const shell=j.outputs.map((out,i)=>outputHTML(out)+meshTextureAction(j,out,i)).join('')+partial+(j.error?recoveryHTML(j.error,j.audioFailure):'')+(pending?'<div class="working-message"><span class="spinner"></span><p>'+esc(j.endpointName?'Waiting for '+j.endpointName:'Your Tiiny is working')+'…</p><button class="button danger" id="stop-current">Stop run</button></div>':'');
   const previous=liveOutputShells.get(output);
   const hasLiveReply=previous?.id===j.id&&!!output.querySelector('[data-chat-live]')?.childElementCount;
-  if(previous?.id!==j.id||previous.html!==shell){
+  let changed=previous?.id!==j.id||previous.html!==shell;
+  if(changed){
     const thinkingOpen=previous?.id===j.id?[...output.querySelectorAll('[data-chat-panel]')].map(el=>el.open):[];
     output.innerHTML=shell;
     liveOutputShells.set(output,{id:j.id,html:shell,thinkingOpen});
@@ -794,16 +933,27 @@ function renderCurrent(j){
   }
   const live=output.querySelector('[data-chat-live]');
   if(live){
-    updateLiveChat(live,j.partial.text);
     const details=output.querySelector('[data-chat-live-details]');
-    const markup=chatDetails(j.partial,'before');
     const current=liveOutputShells.get(output);
-    if(current.details!==markup){
-      const open=details.querySelector('[data-reasoning]')?.open??current.thinkingOpen[0]??false;
-      details.innerHTML=markup;
+    if(current.text!==j.partial.text){
+      updateLiveChat(live,j.partial.text);
+      current.text=j.partial.text;changed=true;
+    }
+    const warning=chatDetails({...j.partial,reasoning:''},'before');
+    if(current.warning!==warning){
+      details.querySelector('.notice')?.remove();
+      details.insertAdjacentHTML('afterbegin',warning);
+      current.warning=warning;changed=true;
+    }
+    if(current.reasoning!==j.partial.reasoning){
       const reasoning=details.querySelector('[data-reasoning]');
-      if(reasoning)reasoning.open=open;
-      current.details=markup;
+      if(reasoning&&j.partial.reasoning)reasoning.querySelector('.output-text').textContent=j.partial.reasoning;
+      else if(reasoning)reasoning.remove();
+      else if(j.partial.reasoning){
+        details.insertAdjacentHTML('beforeend',chatDetails({reasoning:j.partial.reasoning},'before'));
+        details.querySelector('[data-reasoning]').open=current.thinkingOpen[0]||false;
+      }
+      current.reasoning=j.partial.reasoning;changed=true;
     }
     const sources=output.querySelector('[data-chat-live-sources]');
     const sourceMarkup=chatDetails(j.partial,'sources');
@@ -813,17 +963,29 @@ function renderCurrent(j){
       const sourcePanel=sources.querySelector('details');
       if(sourcePanel)sourcePanel.open=!!open;
       current.sources=sourceMarkup;
+      changed=true;
     }
   }
   if(j.status==='completed'){
     const out=j.outputs.at(-1);
     if(task==='chat'&&j.id===chatRunId&&!chat.some(message=>message.runId===j.id)){
       const reply=chatReply(j);
-      if(reply){chat.push(reply);renderChat();chatOptionsStatus();completedAnswer=true;}
+      if(reply){
+        chat.push(reply);renderChat();chatOptionsStatus();completedAnswer=true;
+        const reasoning=$('#chat-history').lastElementChild?.querySelector('[data-reasoning]');
+        if(reasoning&&readingOffset!==null){
+          reasoning.open=true;
+          conversation.scrollTop+=reasoning.getBoundingClientRect().top-readingOffset;
+          if(focusedThinking)reasoning.querySelector('summary').focus({preventScroll:true});
+        }
+      }
     }
     if(out?.assets?.some(a=>a.mime.startsWith('image/'))&&!output.querySelector('[data-animate-current]')){const btn=document.createElement('button');btn.className='button';btn.dataset.animateCurrent='';btn.textContent='Animate this image →';btn.onclick=()=>makeImageVideo(j);output.append(btn);}
   }
-  if(follow){if(completedAnswer&&!hasLiveReply)$('#chat-history').lastElementChild?.scrollIntoView({block:'start'});else scrollConversation();}
+  if(follow&&completedAnswer&&!hasLiveReply){
+    const last=$('#chat-history').lastElementChild;
+    if(last&&conversation)conversation.scrollTop+=last.getBoundingClientRect().top-conversation.getBoundingClientRect().top-12;
+  }else if(follow&&(completedAnswer||pending&&changed))scrollConversation();
 }
 const liveOutputShells=new WeakMap();
 function makeImageVideo(j){
@@ -994,6 +1156,55 @@ function connectionPage(){
   bind('#connection-form','submit',async e=>{e.preventDefault();const b=$('#save-connection');b.disabled=true;report('Connecting…');try{connectionInfo=await api('/api/connection',payload());$('#api-key').value='';page='workbench';await refresh();toast('Your Tiiny is connected. Welcome to Spindle.');}catch(e){report(e.message,true);}finally{b.disabled=false;}});
   bind('#reset-connection','click',async()=>{try{await api('/api/connection/reset',{});connectionInfo=await api('/api/connection');connectionPage();toast('Spindle settings cleared. CLI or environment settings will be used when available.');}catch(e){report(e.message,true);}});
 }
+function endpointsPage(){
+  document.body.classList.remove('creating');
+  const section=page,cloud=section==='cloud-endpoints',kind=cloud?'cloud':'custom';
+  const profiles=customEndpoints.filter(profile=>(profile.kind==='cloud')===cloud);
+  const fields=p=>`<label class="field"><span>Name</span><input name="name" maxlength="80" value="${esc(p?.name)}" placeholder="${cloud?'My cloud provider':'My chat server'}" required></label>
+    <label class="field"><span>API base URL</span><input name="url" type="url" value="${esc(p?.url)}" ${p?'readonly':''} placeholder="${cloud?'https://api.example.org/v1':'http://localhost:11434/v1'}" required autocomplete="off"></label>
+    <label class="field"><span>API key · optional</span><input name="key" type="password" maxlength="4096" placeholder="${p?.keyPresent?'Leave blank to keep the current key':'Bearer key if required'}" autocomplete="off" spellcheck="false"></label>
+    ${p?.keyPresent||p?.needsKey?'<label class="checkline"><input name="clearKey" type="checkbox"> Connect without the current key</label>':''}
+    <label class="checkline"><input name="remember" type="checkbox" ${p?.remember?'checked':''}> Remember the key on this computer (plaintext)</label>`;
+  const description=cloud?'Connect a hosted OpenAI-compatible API, then explicitly select one of its models in Chat.':'Add an OpenAI-compatible API, then pick one of its models in Chat.';
+  const transport=cloud?'Cloud endpoints require HTTPS. Selecting a cloud model sends your chat messages and attached text to that provider.':'Use HTTPS for remote providers. HTTP sends prompts and keys unencrypted.';
+  $('#view').innerHTML=heading('SETTINGS',deviceSections[section],description)+
+    `<div class="connection-layout"><section class="panel"><div class="panel-head"><h2>Add an endpoint</h2></div><div class="panel-body">
+      <form data-endpoint-form>${fields()}<p class="help">Use the base URL before <code>/models</code> and <code>/chat/completions</code>. Spindle discovers models when you save. ${transport} Unremembered keys stay in memory until the helper stops.</p>
+      <div class="actions"><button class="button primary" type="submit">Discover models &amp; save</button></div><div class="connection-message" role="status"></div></form></div></section>
+      <section class="panel"><div class="panel-head"><h2>Saved endpoints</h2></div><div class="panel-body">
+        ${profiles.map(p=>`<details class="section-gap"><summary>${esc(p.name)} · ${p.models.length} models${p.needsKey?' · key needed':''}</summary>
+          <form class="section-gap" data-endpoint-form="${esc(p.id)}">${fields(p)}<div class="actions"><button class="button" type="submit">Save &amp; refresh models</button><button class="button quiet" type="button" data-remove-endpoint>Remove</button></div><div class="connection-message" role="status"></div></form></details>`).join('')||`<p class="help">No ${kind} endpoints yet.</p>`}
+        <p class="help section-gap">These endpoints support text chat and text files. Your Tiiny connection handles device controls, media, Vault, and workflows.</p>
+        ${state?'<button type="button" class="button" id="open-endpoint-chat">Go to Chat</button>':''}</div></section></div>`;
+  renderNavigation();
+  bind('#open-endpoint-chat','click',()=>{task='chat';page='workbench';show();});
+  for(const form of document.querySelectorAll('[data-endpoint-form]')){
+    const id=form.dataset.endpointForm,report=form.querySelector('[role="status"]'),buttons=form.querySelectorAll('button');
+    const run=async fn=>{
+      buttons.forEach(b=>b.disabled=true);report.textContent='Working…';report.classList.remove('error');
+      try{await fn();}
+      catch(error){report.textContent=error.message;report.classList.add('error');}
+      finally{buttons.forEach(b=>b.disabled=false);}
+    };
+    form.onsubmit=event=>{
+      event.preventDefault();
+      const data=new FormData(form);
+      void run(async()=>{
+        const profile=await api('/api/endpoints',{id,kind,name:data.get('name'),url:data.get('url'),key:data.get('key'),remember:data.has('remember'),clearKey:data.has('clearKey')});
+        customEndpoints=await api('/api/endpoints');
+        if(!state)await refresh(false);
+        if(form.isConnected&&page===section)endpointsPage();
+        toast(profile.name+' saved · '+profile.models.length+' models.');
+      });
+    };
+    const remove=form.querySelector('[data-remove-endpoint]');
+    if(remove)remove.onclick=()=>void run(async()=>{
+      customEndpoints=await api('/api/endpoints/remove',{id});
+      if(form.isConnected&&page===section)endpointsPage();
+      toast('Endpoint removed. Its run history is still in Library & runs.');
+    });
+  }
+}
 function onboardingHTML(){
   if(localStorage.getItem('spindle-started')==='yes')return '';
   return `<aside id="onboarding" class="first-result"><div class="first-result-title"><span class="intro-label">YOUR FIRST GOOD RESULT</span><button type="button" class="text-button" data-guide="start">A 60-second orientation ↗</button></div><div class="first-result-steps"><p><b>01</b><span><strong>Choose the job</strong>Pick what you want to make.</span></p><p><b>02</b><span><strong>Start small</strong>Use an example or your own input.</span></p><p><b>03</b><span><strong>Run, then refine</strong>Defaults are a good first choice.</span></p></div><button type="button" class="onboarding-close" aria-label="Dismiss getting started" data-dismiss-onboarding>×</button></aside>`;
@@ -1106,11 +1317,11 @@ function voiceSamplesHTML(){
   return `<section class="guide-note"><h3>Voice samples</h3><audio controls preload="none" src="/samples/${voiceReferenceSample.sample}" aria-label="Synthetic reference recording"></audio><p>${esc(voiceReferenceSample.refText)}</p><p>Try transcription or generate the same line with the default and reference voices. Each result is saved in Library &amp; runs.</p><div class="actions">${buttons.map(([mode,example,label])=>`<button type="button" class="button" data-voice-mode="${mode}" data-voice-example="${guides[mode].examples.findIndex(item=>item.label===example)}" ${state?'':'disabled'}>${label}</button>`).join('')}</div></section>`;
 }
 function openGuide(tabName){
-  const selected=tabName || ({device:'essentials',models:'essentials',security:'privacy'})[page] ||
+  const selected=tabName || ({device:'essentials',models:'essentials',security:'privacy',endpoints:'endpoints','cloud-endpoints':'endpoints'})[page] ||
     (['workflows','meeting','dashboard','library','connection'].includes(page)?page:'task');
   const dialog=$('#guide-dialog'),g=guides[task];
   const sections=items=>items.map((item,i)=>`<details class="guide-section" ${i===0?'open':''}><summary>${esc(item.title)}</summary><p>${esc(item.text)}</p></details>`).join('');
-  const tabs=[['task','This task'],['start','Start here'],['meeting','Meeting Desk'],['workflows','Workflows'],['dashboard','Dashboard'],['library','Find & reuse'],['essentials','Device & models'],['connection','Connect'],['privacy','Privacy & limits']];
+  const tabs=[['task','This task'],['start','Start here'],['meeting','Meeting Desk'],['workflows','Workflows'],['dashboard','Dashboard'],['eyewall','Eyewall'],['library','Find & reuse'],['essentials','Device & models'],['connection','Connect'],['endpoints','Chat endpoints'],['privacy','Privacy & limits']];
   let body='';
   if(Object.hasOwn(workspaceTips,selected)){
     const topic=workspaceTips[selected];
@@ -1120,13 +1331,25 @@ function openGuide(tabName){
   if(selected==='start')body=`<h3 class="guide-feature-title">One small idea is enough.</h3><p class="guide-lead">Make one useful result before exploring all the controls.</p><ol class="guide-tips start-tips"><li><strong>Pick the task.</strong> Chat writes and explains. Images and Video create visuals. Transcribe reads audio; Speech makes it.</li><li><strong>Choose a compatible model.</strong> The workbench lists downloaded models for the task. Model switching can prepare the selected one for you.</li><li><strong>Try an example.</strong> Review the prepared prompt or sample file. Leave advanced settings at {} for the first run.</li><li><strong>Run and give it time.</strong> Preparing a model and generating media can take minutes. The status tells you which stage is happening.</li><li><strong>Keep and refine.</strong> Outputs are saved in Library & runs. Change one part of the input, compare, and save a workflow for repeatable work.</li></ol><div class="actions"><button class="button primary" data-guide="task">Show me examples ↗</button><button class="button quiet" data-show-onboarding>Show start strip</button></div><div class="guide-note"><strong>Keep the surface calm</strong><p>The start strip can be dismissed. This guide stays available from the top bar.</p></div>`;
   if(selected==='essentials')body=`<h3 class="guide-feature-title">A few terms. A lot less guessing.</h3><p class="guide-lead">Open the topic you need.</p>${sections(essentials)}`;
   if(selected==='workflows')body=`<h3 class="guide-feature-title">Connect the result, not just the idea.</h3><p class="guide-lead">Each step has an input and an output. Matching them is the key to a dependable recipe.</p>${sections(workflowTips)}<div class="guide-note"><strong>Two simple patterns</strong><p>Recording → Transcribe → Chat summary → Speech.<br>Image prompt → Images → Video with the previous image as its file input.</p></div>`;
-  if(selected==='privacy')body=`<h3 class="guide-feature-title">Know what stays private.</h3><div class="privacy-card"><strong>HTTP DOES NOT ENCRYPT DEVICE TRAFFIC</strong><p>The API key, prompts and files travel without TLS when your device endpoint uses HTTP. Use a trusted private network or direct connection. HTTPS works only when supported and properly configured on the device.</p></div><div class="privacy-card"><strong>REMEMBERED KEYS ARE PLAINTEXT IN THIS VERSION</strong><p>Leave Remember on this computer off to keep a Spindle connection in server memory until shutdown. Saving it writes the unencrypted key to the ignored local data folder. Native keychain encryption is planned and has not been implemented. Existing CLI or environment credentials are separate.</p></div><div class="privacy-card"><strong>THIS IS A LOCAL, SINGLE-USER APP</strong><p>Keep the helper on your own trusted computer. Do not expose its port to the internet or other users. There is no multi-user login. Docker packaging is not implemented, and macOS/Linux support still needs platform validation.</p></div><h3>Before sharing</h3><p class="guide-lead">Runs, media, model inventories and exports can contain private information. Share only material you reviewed. Keep data/, actual environment files and CLI configuration out of public repositories.</p><h3>Search and share</h3><p class="guide-lead">Search Spindle stays in this browser. Chat web search sends a query to an external provider when enabled. Use Send to Tiiny only for a sensitive message. Vault excerpts go to Tiiny. A reply can quote them and be saved in run history.</p><p class="guide-lead">Device → Security &amp; Privacy offers an optional chat request trace. Review meeting minutes, cut sheets, booklets, and generated HTML before sharing.</p>`;
-  if(selected==='connection')body=`<h3 class="guide-feature-title">Your device, one good connection.</h3><ol class="guide-tips start-tips"><li><strong>Find the address.</strong> Copy your Tiiny device address from TiinyOS network settings or the base URL used by your working Tiiny client.</li><li><strong>Find the key.</strong> Copy it from TiinyOS Settings → API Key. Paste it into Spindle’s Connection form.</li><li><strong>Test before connecting.</strong> A successful test confirms the model-list endpoint responds. It does not load or run a model.</li><li><strong>Choose whether to remember it.</strong> Unchecked keeps the Spindle connection in server memory until shutdown. Checked saves it in the local ignored data folder.</li></ol><div class="guide-note"><strong>If the test fails</strong><p>Check power, the USB or network connection, and the endpoint. An authorization error usually needs the current device key. Advanced routing is for owners who know their device uses a different native or management base URL.</p></div><p class="guide-footnote">Existing CLI or environment settings can supply a connection. A saved key is never sent back to the form.</p>`;
+  if(selected==='privacy')body=`<h3 class="guide-feature-title">Know what stays private.</h3><div class="privacy-card"><strong>HTTP DOES NOT ENCRYPT DEVICE TRAFFIC</strong><p>The API key, prompts and files travel without TLS when your device endpoint uses HTTP. Use a trusted private network or direct connection. HTTPS works only when supported and properly configured on the device.</p></div><div class="privacy-card"><strong>REMEMBERED KEYS ARE PLAINTEXT IN THIS VERSION</strong><p>Leave Remember on this computer off to keep a Spindle connection in server memory until shutdown. Saving it writes the unencrypted key to the ignored local data folder. Native keychain encryption is planned and has not been implemented. Existing CLI or environment credentials are separate.</p></div><div class="privacy-card"><strong>THIS IS A LOCAL, SINGLE-USER APP</strong><p>Keep the helper on your own trusted computer. Do not expose its port to the internet or other users. There is no multi-user login. Docker packaging is not implemented, and macOS/Linux support still needs platform validation.</p></div><h3>Before sharing</h3><p class="guide-lead">Runs, media, model inventories and exports can contain private information. Share only material you reviewed. Keep data/, actual environment files and CLI configuration out of public repositories.</p><h3>Search and share</h3><p class="guide-lead">Search Spindle stays in this browser. Chat web search sends a query to an external provider when enabled. Use Send to Tiiny only for a sensitive message. Vault excerpts go to Tiiny. A reply can quote them and be saved in run history.</p><p class="guide-lead">Settings → Security &amp; Privacy offers an optional chat request trace. Eyewall sends fixed public feed queries. A review shares only public headlines with the selected local model. Project checkpoints and their cached embeddings remain in the private data directory.</p><p class="guide-lead">Review meeting minutes, cut sheets, booklets, and generated HTML before sharing.</p>`;
+  if(selected==='connection')body=`<h3 class="guide-feature-title">Your device, one good connection.</h3><ol class="guide-tips start-tips"><li><strong>Find the address.</strong> Copy your Tiiny device address from TiinyOS network settings or the base URL used by your working Tiiny client.</li><li><strong>Find the key.</strong> Copy it from TiinyOS Settings → API Key. Paste it into Spindle’s Connection form.</li><li><strong>Test before connecting.</strong> A successful test confirms the model-list endpoint responds. It does not load or run a model.</li><li><strong>Choose whether to remember it.</strong> Unchecked keeps the Spindle connection in server memory until shutdown. Checked saves it in the local ignored data folder.</li></ol><div class="guide-note"><strong>If the test fails</strong><p>Check power, the USB or network connection, and the endpoint. An authorization error usually needs the current device key. Advanced routing is for owners who know their device uses a different native or management base URL.</p></div><div class="guide-note"><strong>Other ways to connect</strong><p>Use Custom endpoints for self-hosted chat APIs and Cloud endpoints for hosted chat APIs. If the helper and Tiiny travel separately, the optional USB travel relay can carry the existing Tiiny connection over a private SSH tunnel.</p></div><p class="guide-footnote">Existing CLI or environment settings can supply a connection. A saved key is never sent back to the form.</p>`;
   $('#guide-content').innerHTML=`<header class="guide-header"><div><span class="intro-label">A LITTLE GUIDANCE. MORE POSSIBILITY.</span><h2 id="guide-title">The Spindle field guide</h2></div><button class="dialog-close" aria-label="Close field guide" data-close-guide>×</button></header><nav class="guide-tabs" aria-label="Guide sections">${tabs.map(([id,label])=>`<button data-guide="${id}" aria-pressed="${selected===id}">${label}</button>`).join('')}</nav><div class="guide-body">${body}</div>`;
   if(!dialog.open)dialog.showModal();
   dialog.scrollTop=0;
 }
 document.addEventListener('click',async e=>{
+  const saveCheckpoint=e.target.closest('[data-save-checkpoint]');
+  if(saveCheckpoint&&projectControls){
+    saveCheckpoint.disabled=true;
+    try{await projectControls.capture(saveCheckpoint.dataset.saveCheckpoint,chatProjectId);}
+    catch(error){toast(error.message);}
+    finally{saveCheckpoint.disabled=false;}
+    return;
+  }
+  const showCheckpoint=e.target.closest('[data-show-checkpoint]');
+  if(showCheckpoint&&projectControls){
+    void projectControls.open(showCheckpoint.dataset.checkpointProject,showCheckpoint.dataset.showCheckpoint);return;
+  }
   const jump=e.target.closest('[data-chat-jump]');
   if(jump){
     const heading=jump.closest('.chat-markdown').querySelector(`[data-chat-heading="${jump.dataset.chatJump}"]`);
@@ -1257,10 +1480,19 @@ globalSearch?.mountGlobalSearch({
     if(card){card.tabIndex=-1;card.focus({preventScroll:true});card.scrollIntoView({block:'start'});}
   },
 });
-const requestedMuseum=new URL(location.href).searchParams.get('museum');
+const launchParams=new URL(location.href).searchParams;
+const requestedMuseum=launchParams.get('museum');
 if(/^[a-f0-9-]{36}\.html$/.test(requestedMuseum || ''))location.replace('/api/museum/preview/'+requestedMuseum);
 else{
-  connectionInfo=await api('/api/connection');if(connectionInfo.keyPresent)await refresh();else{$('#connection').textContent='Connect your Tiiny';$('#resident').textContent='Endpoint and key are all you need.';page='connection';show();}await poll();async function pollAgain(){await poll();setTimeout(pollAgain,runs.some(r=>['queued','running'].includes(r.status))?600:2500);}setTimeout(pollAgain,2500);
+  [connectionInfo,customEndpoints]=await Promise.all([api('/api/connection'),api('/api/endpoints').catch(()=>[])]);
+  const openEyewallGuide=launchParams.get('guide')==='eyewall';
+  if(launchParams.get('view')==='dashboard'||openEyewallGuide)page='dashboard';
+  if(connectionInfo.keyPresent||customEndpoints.length){
+    await refresh(page!=='dashboard');
+    if(launchParams.get('view')==='dashboard'||openEyewallGuide){page='dashboard';show();}
+  }else{$('#connection').textContent='Connect your Tiiny';$('#resident').textContent='Endpoint and key are all you need.';if(page!=='dashboard')page='connection';show();}
+  if(openEyewallGuide)openGuide('eyewall');
+  await poll();async function pollAgain(){await poll();setTimeout(pollAgain,runs.some(r=>['queued','running'].includes(r.status))?600:2500);}setTimeout(pollAgain,2500);
   window.addEventListener('pageshow',()=>void poll());
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
 }

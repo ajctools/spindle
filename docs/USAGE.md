@@ -14,9 +14,9 @@ node server.mjs
 
 Open **http://127.0.0.1:8437**. On Windows, `Start-Spindle.ps1` also starts it using your installed Node.js runtime.
 
-The first screen for a new owner is **Device → Connection**. Enter a device URL such as `http://192.0.2.10`, or an OpenAI-compatible base URL ending in `/v1`. Paste the key from TiinyOS **Settings → API Key**, test the connection, then connect. Keep the terminal open. After updating the source, wait for active work to finish, stop the existing helper with Ctrl+C in its terminal, start the updated helper, and reload the browser.
+The first screen for a new owner is **Settings → Tiiny connection**. Enter a device URL such as `http://192.0.2.10`, or Tiiny’s OpenAI-compatible base URL ending in `/v1`. Paste the key from TiinyOS **Settings → API Key**, test the connection, then connect. Keep the terminal open. After updating the source, wait for active work to finish, stop the existing helper with Ctrl+C in its terminal, start the updated helper, and reload the browser.
 
-![First connection screen under Device with a documentation-only endpoint](images/connection.jpg)
+![Tiiny connection screen with a documentation-only endpoint](images/connection.jpg)
 
 - Leave **Remember on this computer** off for a connection held in server memory until shutdown.
 - Turn it on to save settings in `data/connection.json`. This file contains the unencrypted key and is excluded from Git. Windows uses the selected folder’s inherited permissions; use a private folder.
@@ -27,7 +27,33 @@ Configuration precedence: environment overrides, a Spindle session connection, s
 
 Optional environment variables: `TIINY_HOST`, `TIINY_KEY`, `TIINY_CONFIG`, `SPINDLE_PORT`, and `SPINDLE_DATA_DIR`. For an environment file, copy `.env.example` to `.env`, edit it, and run `node --env-file=.env server.mjs`.
 
-Once connected, Spindle opens **Chat & create** with Chat & vision selected, including after a fresh reload. Use the workspace picker for images, audio, video, and the other creation modes. On phones, the menu button opens the main navigation. Open **Device** for Overview, Models, Connection, and Security & Privacy.
+### Taking Tiiny away from the Spindle host
+
+If you reach Spindle through a VPN and carry Tiiny with you, attach Tiiny by USB to the computer that travels with it. That computer can open a reverse SSH tunnel to the Spindle host so the host can still reach the device. Use an existing SSH alias with a verified host key and working key-based login through the VPN.
+
+On the traveling computer, find the IPv4 addresses of its USB network adapter and Tiiny's **usb0** adapter. Start the relay with those two addresses, in that order. The command below uses documentation addresses.
+
+```sh
+node scripts/tiiny-usb-relay.mjs spindle-home 198.51.100.2 198.51.100.1 18438
+```
+
+You can append Tiiny's Wi-Fi IPv4 address as a fallback. The relay prefers USB, then checks each configured network address through a computer adapter on the same subnet. It verifies Tiiny's API response before forwarding requests. The Wi-Fi address may change on another network. USB provides a stable route while you move between networks.
+
+```sh
+node scripts/tiiny-usb-relay.mjs spindle-home 198.51.100.2 198.51.100.1 18438 192.0.2.20
+```
+
+For unattended Windows use, run the relay hidden with Task Scheduler while your user is signed in. Include a repeating one-minute trigger alongside the sign-in trigger, enable **Run task as soon as possible after a scheduled start is missed**, allow battery operation, and select **Do not start a new instance**. Capture standard output and errors in the ignored local data folder. The repeating trigger restores a stopped relay after sleep or a process failure. The relay retries SSH while the VPN is unavailable.
+
+On the Spindle host, set `SPINDLE_TIINY_RELAY_FOR` to the exact saved Tiiny LAN endpoint (for example, `http://192.0.2.10/v1`) and `SPINDLE_TIINY_RELAY_ORIGIN` to `http://127.0.0.1:18438`. Configure the SSH server to keep reverse listeners on loopback. Restart Spindle when device work is idle. Spindle prefers the home LAN and uses the relay if the LAN stops responding and the relay reaches Tiiny. The key, model defaults, and history still belong to the saved Tiiny connection. Keep the relay running and use the VPN to reach the home host. After a network change, the relay reconnects once SSH is reachable again.
+
+Once connected, Spindle opens **Chat & create** with Chat & vision selected, including after a fresh reload. Use the workspace picker for images, audio, video, and the other creation modes. On phones, the menu button opens the main navigation. Open **Settings** for the Tiiny overview, models, connections, and privacy controls.
+
+In **Settings → Custom endpoints**, give each API a name, enter its base URL (for example, `http://localhost:11434/v1`), and supply its own key if required. Spindle discovers models via `GET /models`; pick one under the endpoint’s name in Chat. The API must accept `POST /chat/completions`. These chats support text prompts, text attachments, and streamed replies when supported by the provider. Selecting a different model starts a fresh conversation. Spindle’s web search, Vault, project recall, and media workflows stay on the Tiiny path. Use HTTPS for remote endpoints, since the selected provider receives the conversation, attached text, and its own key. The endpoint stays saved; leave **Remember the key** off to keep its key in memory for the current helper session.
+
+Use **Cloud endpoints** beside **Custom endpoints** for a hosted OpenAI-compatible provider. Cloud profiles require HTTPS and appear with a **Cloud** label in Chat’s model picker. Select a cloud model to use it for that chat. Existing endpoint profiles are managed in the section where they were saved.
+
+In Chat, press **Ctrl+Enter** or **⌘+Enter** to send. Plain Enter adds a new line.
 
 ## Dashboard & performance history
 
@@ -54,6 +80,16 @@ The presets link to [Anthropic pricing](https://platform.claude.com/docs/en/abou
 
 This estimates potential API spend avoided. Providers tokenize differently and models differ in capability. It is not an equivalent-result quote or net savings after hardware/electricity. Uncached input and output rates exclude cache discounts, batch pricing, tools, subscriptions, taxes and long-context premiums. Check the linked provider terms before using a comparison for purchasing decisions.
 
+### Eyewall incident atlas
+
+Open **Dashboard → Eyewall · AI incidents**, or select the eye-and-brick icon beside Spindle’s star to jump straight to live reports. The shortcut pulses when reports are unread. Opening Live reports marks the current batch as seen in that browser. Rotate the globe or switch to the flat map, then use **Evidence replay** to see which sources were public on a selected date. The bundled cases and basemap are available offline.
+
+**Live reports** collects public publisher headlines and community leads. Every item is marked **Unverified** and links to its source. Refresh manually or enable a 15-minute refresh while Spindle is visible. Source status shows partial outages. The globe uses the documented geography of curated cases.
+
+To add optional topic and relevance labels, load a chat model in **Settings → Models**, then choose **Find Spindle models** under **Sources and local model**. Eyewall prefers an already loaded Tiiny chat model. Configured OpenAI-compatible endpoints on loopback or private IP addresses are also available for explicit selection. A review sends at most twelve public headlines to the selected model. It can run on demand or after refresh when enabled in the current tab. Model labels leave the report’s verification unchanged.
+
+The globe uses [NASA Earth Observatory’s Blue Marble](https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-topography-bathymetry/) and the flat map uses [Natural Earth land data](https://www.naturalearthdata.com/downloads/110m-physical-vectors/110m-land/).
+
 ## Workspaces
 
 | Workspace | Purpose |
@@ -72,7 +108,7 @@ This estimates potential API spend avoided. Providers tokenize differently and m
 
 Advanced JSON exposes model-specific parameters. Runtime info reads the selected running model's own capabilities and defaults. Short video previews use supported canvases and step options when available.
 
-**Test capability** runs a real sample and records its result under **Device → Capability readiness**. Some models take several minutes to load or generate. Preparation, execution, progress, and restoration are shown separately.
+**Test capability** runs a real sample and records its result under **Settings → Tiiny overview → Capability readiness**. Some models take several minutes to load or generate. Preparation, execution, progress, and restoration are shown separately.
 
 In **Speech**, **Clone a synthetic voice** prepares a playable reference recording, its transcript, and new text to speak. It selects a downloaded voice-clone model when Spindle recognizes one. You can substitute your own recording or one you have permission to use and enter its exact words under **Speech options**. Tiiny receives the recording and transcript. The generated audio and reference text are saved locally. Voice cloning and control over delivery depend on the model and firmware.
 
@@ -112,13 +148,19 @@ During a chat run, the status strip shows elapsed time, context use, output spee
 
 **Attach from Vault.** In Chat, choose a document and preview an opening excerpt, or search for a specific passage. Spindle searches supported text files directly on your Tiiny and can use Vault search for indexed documents. The selected excerpt goes to Tiiny with your next message. To keep the prompt on Tiiny as well, choose **Send to Tiiny only** or turn off web search.
 
+**Projects and checkpoints.** Open **Projects** in Chat to create or open a project. Click **Save checkpoint** on a reply to keep the exact reply and a short brief. The brief starts as an excerpt. Open the checkpoint to edit it or draft a replacement with a loaded Tiiny chat model, then save your changes. **Resume** starts a fresh chat using the brief once. **Refine original** uses the exact saved reply on your next send.
+
+Project chat checks the project's saved briefs for relevant context before planning web search. It can match by meaning when a compatible embedding model is already loaded, and otherwise matches by words and identifiers. **Used memory** links to the checkpoints included in a reply. Use **Pause** to skip project memory for subsequent turns in this chat. A project search query entered in Chat options is cleared after you send it. Saved briefs stay out of automated web-search planning. If a follow-up needs web research on a subject only named in a checkpoint, enter the public query you want to send.
+
+Export a checkpoint's brief and sources as Markdown for manual transfer to Vault or another tool. Export a project as JSON and use **Import project** on another Spindle installation to bring its checkpoints and original replies over. These downloads contain private text. Project memory lives in the local helper's data directory and uses SQLite where available, with a flat-file fallback for older Node 22 releases. Deleting a checkpoint removes it from recall. Original conversations, later replies, and exports can still contain its text.
+
 **Default chat model.** Spindle uses Qwen3.6 Turbo as the default when a matching chat model is downloaded. Choose a different default or turn off preloading in **Chat options**. Chat uses a compatible model already loaded on Tiiny when you open the app. With model switching enabled, a successful chat turn keeps its model loaded and your chat selection carries across New chat and workspace changes. Workflows restore their starting models when switching is enabled. To manage loaded models manually, open **Device → Models**.
 
 **App preview.** Ask for a complete HTML document with its CSS and JavaScript included. Choose **Open app preview** below a completed reply, or find an earlier reply in **Library & runs**. The app opens beside Chat on a wide screen and fills the screen on smaller devices. The preview uses an isolated frame and blocks external scripts and styles, so use inline code and embedded assets.
 
-**Search the web when useful** is on by default, and its on/off choice and provider are remembered across reloads in this browser. The notice beside Send stays visible while Chat options is collapsed. Turn it off in Chat options for local-only inference. When the query field is blank, Tiiny reads the current prompt and decides whether to generate a short public search query. The provider receives only that query. An explicit query skips that decision. Use an explicit, short query to keep sensitive material out of searches. Conversation history, image attachments, and the Tiiny key are not sent to the search provider. Workflow steps search using their configured query or eligible step prompt. Saved workflows keep the search choice and query. The Brave key stays in helper memory.
+**Search the web when useful** is on by default, and its on/off choice and provider are remembered across reloads in this browser. The notice beside Send stays visible while Chat options is collapsed. Turn it off in Chat options for local-only inference. When the query field is blank, Spindle turns short public lookups such as “What are the top open weight models for scientific research?” into a search query directly. For other requests, Tiiny decides whether to search and drafts a query. The provider receives only the resulting query. Enter your own query to override automatic search. Use an explicit, short query to keep sensitive material out of searches. Conversation history, image attachments, and the Tiiny key are not sent to the search provider. Workflow steps search using their configured query or eligible step prompt. Saved workflows keep the search choice and query. The Brave key stays in helper memory.
 
-For automatic web search, Tiiny checks whether the excerpts support the question. Spindle can try one alternate query and read excerpts from up to two public HTTPS results when coverage is incomplete. **Web sources** lists the evidence used and the queries tried. Chat flags partial or missing evidence. Enter a query to run that search directly.
+For searches it plans, Tiiny checks whether the excerpts support the question. Spindle can try one alternate query and read excerpts from up to two public HTTPS results when coverage is incomplete. If a follow-up search or review fails, Spindle keeps sources Tiiny already verified and marks the evidence as partial. **Web sources** lists the evidence used and the queries tried. Enter a query to run that search directly.
 
 - **DuckDuckGo:** keyless, best-effort HTML search over HTTPS. It may return no results, rate-limit requests, change its markup, or require a browser verification. Spindle respects browser verification and stops the search.
 - **Brave Search:** configure a separate Brave Search API key in the chat controls ([provider documentation](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)). It is held in the local helper’s memory until **Forget search key** or restart, shared only within this single-user helper. No disk or browser-storage persistence. API quotas or charges depend on your Brave account.
@@ -245,4 +287,4 @@ In **Workflows → Facsimile Book**, add up to six scans or try the three synthe
 
 Browser tabs using the same Spindle helper share its library. Separate helpers keep their own history and files even when they connect to the same Tiiny. The helper currently accepts loopback connections on its host computer.
 
-**Device → Power & recovery** offers restart, shutdown, and automatic power on after AC power returns. Spindle checks for active work before sending a power action.
+**Settings → Tiiny overview → Power & recovery** offers restart, shutdown, and automatic power on after AC power returns. Spindle checks for active work before sending a power action.

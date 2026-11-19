@@ -35,6 +35,21 @@ export function searchQuery({query,prompt,usesWorkflowData=false,secrets=[]}){
   if(secrets.some(secret=>secret&&[secret,encodeURIComponent(secret),Buffer.from(secret).toString('base64')].some(value=>text.includes(value))))throw new Error('Remove the API key from the web search query before sending.');
   return text;
 }
+
+// Only bypass planning for a short, self-contained lookup. Leave prose,
+// context-dependent questions and anything resembling private data to the planner.
+export function directSearchQuery(prompt){
+  const text=prompt.trim();
+  if(text.length>160||!/^[-\p{L}\p{M}\p{N} ,.'’?!]+$/u.test(text))return '';
+  const query=text.match(/^(?:please +)?(?:(?:can|could|would) you +)?(?:look up|search (?:the web )?for) +(.+?)[.?!]*$/i)?.[1]
+    ??text.match(/^(?:what (?:are|is)|what['’]s) +(?:the +)?((?:top|best|latest|newest|current|weather|forecast)\b.+?)[.?!]*$/i)?.[1]
+    ??text.match(/^(?:who (?:is|are)|who['’]s) +(?:the +)?(current\b.+?)[.?!]*$/i)?.[1];
+  if(!query||query.split(/ +/).length>20||/[?!]|\.(?![\p{L}\p{N}])/u.test(query))return '';
+  if(/\b(?:i|me|my|mine|we|us|our|ours|you|your|this|that|these|those|it|them|above|below|attached|private|internal|confidential|credential[s]?|password[s]?|secret[s]?|api key[s]?|access token[s]?|localhost|write|draft|summari[sz]e|ignore)\b/i.test(query))return '';
+  // Skip hostnames, IPs, long identifiers and words joined with periods.
+  if(/\.(?!\d)|(?:\d+\.){2}|[\p{L}\p{N}]{24}/u.test(query))return '';
+  return query.replace(/ +/g,' ').trim();
+}
 const decode=value=>String(value || '').replace(/&#(x[\da-f]+|\d+);/gi,(_,v)=>{const n=v[0].toLowerCase()==='x'?parseInt(v.slice(1),16):Number(v);return n>0&&n<=0x10ffff?String.fromCodePoint(n):'';}).replace(/&(amp|quot|apos|lt|gt|nbsp);/g,(_,v)=>({amp:'&',quot:'"',apos:"'",lt:'<',gt:'>',nbsp:' '}[v]));
 const plain=value=>decode(String(value || '').replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim();
 export function publicSearchURL(value){
@@ -345,15 +360,28 @@ export async function researchWeb({query,alternate,review,readPage=readPublicPag
     const {indices,complete}=await review(evidence);
     return {sources:indices.map(i=>evidence.sources[i]),complete:indices.length>0&&complete};
   };
+  const reviewMore=async (evidence,previous)=>{
+    try{
+      const next=await select(evidence);
+      return next.sources.length?next:previous;
+    }catch(error){
+      options.signal?.throwIfAborted();
+      if(!previous.sources.length)throw error;
+      return previous;
+    }
+  };
   let selected=search?await select(search):{sources:[],complete:false};
   if(!selected.complete&&alternate){
     queries.push(alternate);
     let followup;
     try{followup=await searchWeb({...options,query:alternate});}
-    catch(error){if(!selected.sources.length||error.code!=='NO_SEARCH_RESULTS')throw error;}
+    catch(error){
+      options.signal?.throwIfAborted();
+      if(!selected.sources.length)throw error;
+    }
     if(followup){
       search={...followup,sources:uniqueEvidence([...followup.sources,...selected.sources,...(search?.sources??[])])};
-      selected=search.sources.some(source=>source.forecast)?{sources:search.sources,complete:true}:await select(search);
+      selected=search.sources.some(source=>source.forecast)?{sources:search.sources,complete:true}:await reviewMore(search,selected);
     }
   }
   if(!selected.complete&&search){
@@ -368,7 +396,7 @@ export async function researchWeb({query,alternate,review,readPage=readPublicPag
     }));
     if(expanded.some(source=>source.excerpt)){
       search={...search,sources:uniqueEvidence([...expanded,...selected.sources,...search.sources])};
-      selected=await select(search);
+      selected=await reviewMore(search,selected);
     }
   }
   if(!selected.sources.length)throw Error('Search found pages, but their excerpts did not provide enough evidence to answer this request.');

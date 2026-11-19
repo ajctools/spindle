@@ -2,7 +2,7 @@
 
 # Spindle
 
-Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, turn recordings into reviewed meeting minutes, create images and audio, and connect model steps into repeatable workflows. The dashboard keeps a history of runs and device performance.
+Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, turn recordings into reviewed meeting minutes, create images and audio, and connect model steps into repeatable workflows. The dashboard tracks runs and device performance, and Eyewall follows public AI incident reporting.
 
 **[Latest release](https://github.com/ajctools/spindle/releases/latest) · [Current source](https://github.com/ajctools/spindle/tree/main) · MIT license · Node.js 22+ · No Tiiny SDK required**
 
@@ -14,7 +14,7 @@ Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, 
 > - **Do not expose the helper server to the internet or other users.** There is no multi-user login. Docker packaging is **not implemented**.
 > - **Data stays private only if you handle it privately.** Runs, media, inventories, and exports can contain sensitive information. Never publish `data/`, actual environment files, or CLI configuration.
 >
-> - **Web search is external and starts enabled.** In Chat, an explicit or Tiiny-generated query goes to DuckDuckGo or Brave over HTTPS. **Send to Tiiny only** skips web search for one message. Conversation history, image attachments, Vault excerpts, and the Tiiny key stay out of the search request. Queries and results remain in local run history.
+> - **Web search is external and starts enabled.** In Chat, an explicit or automatically prepared query goes to DuckDuckGo or Brave over HTTPS. **Send to Tiiny only** skips web search for one message. Conversation history, image attachments, Vault excerpts, and the Tiiny key stay out of the search request. Queries and results remain in local run history.
 >
 > Read [Security & privacy](docs/SECURITY.md). A local audit is not a guarantee that every vulnerability has been found.
 
@@ -22,7 +22,7 @@ Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, 
 
 ![Spindle dashboard with synthetic usage, throughput, and device metrics](docs/images/dashboard.jpg)
 
-*Screenshots show the current source with synthetic models, recordings, usage, and hardware values. Tagged releases can have an earlier interface.*
+*Screenshots show synthetic models, recordings, usage, and hardware values. Some screens reflect an earlier release.*
 
 | Speech workspace | Guided workflows |
 | --- | --- |
@@ -38,7 +38,7 @@ Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, 
    node server.mjs
    ```
 
-3. **Open <http://127.0.0.1:8437>.** In **Device → Connection**, enter your Tiiny endpoint and key, test the connection, and connect. Spindle opens into **Chat & create** after setup. **Device** also contains Models, Security & Privacy, and the device overview.
+3. **Open <http://127.0.0.1:8437>.** In **Settings → Tiiny connection**, enter your Tiiny endpoint and key, test the connection, and connect. Spindle opens into **Chat & create** after setup. **Custom endpoints** adds self-hosted OpenAI-compatible APIs, and **Cloud endpoints** adds hosted APIs over HTTPS.
 
 There is no `npm install` step. The Windows launcher `Start-Spindle.ps1` uses an installed Node runtime. A browser tab by itself, a single HTML file, or GitHub Pages cannot run the local helper.
 
@@ -54,7 +54,7 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 
 | Workspace | What you can do |
 | --- | --- |
-| Chat & vision | Stream replies, see context and cache usage, upload text or images, attach Vault excerpts, and turn long pastes into text files |
+| Chat & vision | Stream replies, see context and cache usage, use Focus mode, attach Vault excerpts, and save replies as project checkpoints |
 | Images | Generate an image or use a supported reference-image model |
 | Transcribe / Speech / Music | Convert recordings to text, synthesize speech, try reference-voice cloning on compatible models, and generate music |
 | Video | Generate a clip or animate a starting image, with job progress and saved output |
@@ -64,8 +64,9 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 | PromptDex & Search Spindle | Prepare reusable prompts, compare two models, and find saved work across the app |
 | Workflows | Make a film, review retakes, repair a soundtrack, build an offline gallery or booklet, or save a sequential recipe |
 | Dashboard | Sort performance tables and see weekly token usage by app and model across the Tiiny |
+| Eyewall | Browse a globe of curated AI incidents, replay public evidence, and review unverified news and community leads |
 | Library & runs | Reopen saved inputs and outputs, download text attachments, and copy prompts and replies |
-| Device | Browse available, downloaded, and loaded models. Manage the connection and view privacy settings |
+| Settings | Manage Tiiny, custom, and cloud endpoints, browse Tiiny models, and view privacy settings |
 
 > [!WARNING]
 > **Model listings are device-reported metadata, not a compatibility guarantee.** Firmware and runtimes change. Test small inputs first. Model switching unloads models and can affect other clients; restoration can fail after a disconnect or shutdown.
@@ -100,7 +101,7 @@ The generated museum also offers two Tiiny-made surface textures, using supplied
 
 Chat streams the response and separates returned reasoning into a collapsed **Thinking** panel. Thinking mode and effort controls follow the device’s reported model capabilities. Models that do not return reasoning show only their answer. Turn streaming off if your firmware rejects streaming requests.
 
-**Search the web when useful** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification. Brave Search uses a separate API key. Tiiny decides whether to search and writes a short query unless you enter one yourself. Spindle shows source links and retrieval time, and labels chat replies that continue without sources after a search failure. For weather queries, Spindle can look up a U.S. city and state or ZIP code with the National Weather Service and include its dated forecast periods. Other results supply snippets. Citations are model-generated, so check the linked sources. No SDK is required.
+**Search the web when useful** is enabled initially and remembered in this browser. It supplies up to five search snippets to any compatible chat model. DuckDuckGo needs no key but may rate-limit or request browser verification. Brave Search uses a separate API key. Spindle can search directly for short public lookups. For other prompts, Tiiny decides whether to search and drafts a query. Enter your own query to search for exactly what you specify. Spindle shows source links and retrieval time, and labels chat replies that continue without sources after a search failure. For weather queries, Spindle can look up a U.S. city and state or ZIP code with the National Weather Service and include its dated forecast periods. Other results supply snippets. Citations are model-generated, so check the linked sources. No SDK is required.
 
 ![Chat generating a reply with elapsed time, a context meter, generation speed, and cache hits](docs/images/chat.jpg)
 
@@ -116,7 +117,15 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 
 **Search Spindle** (Ctrl+K or ⌘K) finds saved chats, meeting passages, runs, workflows, PromptDex entries, models, and workspace shortcuts. Search stays in your browser. The **Field guide** opens to help for the current workspace.
 
-**Device → Security & Privacy** can capture where Spindle sent chat and search requests, along with transport and response metadata. The Chat composer previews destinations and offers **Send to Tiiny only** for a single message.
+**Settings → Security & Privacy** can capture where Spindle sent Tiiny chat and search requests, along with transport and response metadata. The Chat composer previews destinations and offers **Send to Tiiny only** for a single message on a Tiiny model.
+
+## Eyewall and project memory
+
+Open **Eyewall** from the Dashboard or the eye-and-brick icon beside the Spindle star. The icon pulses for unread reports. **Live reports** links to public publisher headlines and community leads, each marked **Unverified**. Refresh manually or opt into a 15-minute refresh while Spindle is visible. Optional headline review uses a loaded Tiiny chat model or a configured local endpoint for topic and relevance suggestions. **Evidence replay** shows what was public at the selected date.
+
+**Project memory** lets you save a useful reply as a checkpoint for a later Tiiny chat. Choose its brief or full result, pause recall, or export the project. Checkpoints and cached embeddings live in the helper’s private data directory. For optional remote chat, set up **Cloud endpoints** and select its model in Chat. The notice beside Send identifies the destination and what will be sent.
+
+See [usage and configuration](docs/USAGE.md) for Eyewall, project memory, Focus mode, and the optional [Tiiny USB travel relay](docs/USAGE.md#taking-tiiny-away-from-the-spindle-host).
 
 ## A dashboard with context
 

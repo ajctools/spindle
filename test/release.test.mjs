@@ -18,6 +18,9 @@ test('release scanning catches private values, non-example addresses and hidden 
   const binary=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.from(['sample','outside.invalid'].join('@'))]);
   assert.equal(scanReleaseFile('example.png',binary).length,0);assert.ok(scanReleaseFile('example.png',binary,[{label:'known secret',value:'sample'}]).includes('known secret'));
   assert.ok(scanReleaseFile('example.jpg',Buffer.from([255,216,255,225,0,4,0,0,255,217])).includes('image metadata requiring manual review'));
+  assert.ok(scanReleaseFile('renamed.bin',Buffer.from('SQLite format 3\0')).includes('runtime database or journal'));
+  assert.ok(scanReleaseFile('projects.sqlite-wal',Buffer.alloc(1)).includes('runtime database or journal'));
+  assert.ok(scanReleaseFile('public/data/runs.json',Buffer.from('[]')).includes('private runtime path'));
 });
 test('release manifest excludes runtime, credentials, screenshots and unlisted files',async()=>{
   const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),temp=await fs.mkdtemp(path.join(root,'test','.runtime-'));
@@ -25,6 +28,10 @@ test('release manifest excludes runtime, credentials, screenshots and unlisted f
     const output=path.join(temp,'release'),manifest=await buildRelease({root,output});
     assert.equal(manifest.files.length,RELEASE_FILES.length);assert.ok(manifest.files.every(r=>!/^(?:data|work)\//.test(r.path)&&r.path!=='.env'));
     assert.ok(!RELEASE_FILES.some(name=>name.includes('screenshot')||name.includes('catalog.json')));
+    const entries=await fs.readdir(output,{recursive:true,withFileTypes:true});
+    assert.ok(entries.every(entry=>entry.isDirectory()||entry.isFile()));
+    const files=entries.filter(entry=>entry.isFile()).map(entry=>path.relative(output,path.join(entry.parentPath,entry.name)).split(path.sep).join('/'));
+    assert.deepEqual(files.sort(),[...RELEASE_FILES,'RELEASE-MANIFEST.json'].sort());
     assert.equal(JSON.parse(await fs.readFile(path.join(output,'RELEASE-MANIFEST.json'),'utf8')).version,JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8')).version);
     await assert.rejects(buildRelease({root,output}),/never overwritten/);
   }finally{assert.ok(temp.startsWith(path.join(root,'test')+path.sep));await fs.rm(temp,{recursive:true,force:true});}

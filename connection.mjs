@@ -19,6 +19,46 @@ export function deviceURL(connection,route,transport='native') {
   if(route.startsWith('/api/')||route.startsWith('/kb/'))return connection.managementBase+route;
   return (transport==='openai'?connection.openaiBase:connection.nativeBase)+route.replace(/^\/v1/,'');
 }
+
+export function createTiinyRelay({endpoint,origin}, {request=fetch,now=Date.now}={}){
+  if(!endpoint&&!origin)return null;
+  const primary=new URL(endpoint),relay=new URL(origin);
+  if(primary.protocol!=='http:'||primary.username||primary.password||primary.search||primary.hash||
+     relay.protocol!=='http:'||relay.hostname!=='127.0.0.1'||!relay.port||relay.href!==relay.origin+'/'||primary.origin===relay.origin){
+    throw Error('The Tiiny USB relay requires an HTTP LAN endpoint and a distinct HTTP loopback origin with an explicit port.');
+  }
+  const primaryEndpoint=primary.href.replace(/\/$/,'');
+  const viaRelay=url=>{const target=new URL(url);target.host=relay.host;return target.href;};
+  let selected=false,checkedUntil=0,pending;
+  async function isTiiny(url,hostRouting){
+    try{
+      const response=await request(url,{headers:hostRouting?{Host:'openai.api.tiiny'}:{},redirect:'error',signal:AbortSignal.timeout(1200)});
+      if(response.status!==401){
+        void response.body?.cancel().catch(()=>{});
+        return false;
+      }
+      const body=await response.json();
+      return body.error==='unauthorized'&&body.reason==='missing_token';
+    }catch{return false;}
+  }
+  async function choose(connection){
+    const models=deviceURL(connection,'/v1/models','openai');
+    const local=await isTiiny(models,connection.hostRouting);
+    selected=!local&&await isTiiny(viaRelay(models),connection.hostRouting);
+    checkedUntil=now()+(local?5000:selected?15000:1000);
+  }
+  return {
+    async target(connection,url){
+      if(connection.endpoint!==primaryEndpoint)return url;
+      if(now()>=checkedUntil){
+        pending??=choose(connection).finally(()=>{pending=null;});
+        await pending;
+      }
+      return selected?viaRelay(url):url;
+    },
+    invalidate(){checkedUntil=0;},
+  };
+}
 export function publicConnection(connection,source,remembered=false){
   return {endpoint:connection?.endpoint || '',nativeEndpoint:connection?.nativeBase || '',managementEndpoint:connection?.managementBase || '',
     hostRouting:connection?.hostRouting!==false,keyPresent:!!connection?.key,source,remembered};

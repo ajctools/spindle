@@ -7,12 +7,38 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
 import {voiceReferenceSample} from '../public/guidance.mjs';
+import {unreadReports,seeReports,autoRefreshEnabled,setAutoRefresh,refreshIsDue,refreshInterval} from '../public/eyewall/read-state.mjs';
+
+test('Eyewall tracks unread headlines independently of the opt-in refresh',t=>{
+  const storage=new Map();
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
+  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{
+    getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),
+  }});
+  t.after(()=>previous?Object.defineProperty(globalThis,'localStorage',previous):delete globalThis.localStorage);
+  const a={firstSeenAt:'2026-11-19T12:00:00Z'},b={firstSeenAt:'2026-11-19T12:15:00Z'};
+  assert.equal(autoRefreshEnabled(),false);
+  assert.equal(unreadReports([a]),1);
+  seeReports([a]);
+  assert.equal(unreadReports([a,b]),1);
+  seeReports([a,b]);
+  seeReports([a]);
+  assert.equal(unreadReports([a,b]),0);
+  setAutoRefresh(true);
+  assert.equal(autoRefreshEnabled(),true);
+  assert.equal(refreshIsDue({lastAttempt:a.firstSeenAt},Date.parse(a.firstSeenAt)+refreshInterval-1),false);
+  assert.equal(refreshIsDue({lastAttempt:a.firstSeenAt},Date.parse(b.firstSeenAt)),true);
+  assert.equal(refreshIsDue({lastAttempt:a.firstSeenAt,readOnly:true},Date.parse(b.firstSeenAt)),false);
+});
 
 const chatPrompt='Look up the meaning of {{previous.text}}';
 const priorTurn='Private text from an earlier chat turn';
 const failedSearchQuery='Fixture query with no results';
 const longChatPrompt='Write a story. '.repeat(40)+'Check current public facts about maple production.';
 const automaticQuery='current maple production statistics';
+const timedOutSearchPrompt='Find current public statistics for maple production.';
+const rankedModelsPrompt='What are the top open weight models for scientific research';
+const rankedModelsQuery='top open weight models for scientific research';
 const alertPrompt='Can you find current public information about a fictional aviation safety notice?';
 const alertQuery='fictional aviation safety notice';
 const alertAlternate='aviation authority fictional safety bulletin';
@@ -79,19 +105,38 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     }
     if(p==='/v1/chat/completions'){
       const b=JSON.parse(raw);assert.equal(b.model,'test/chat');
-      if(!b.stream){
+      const instruction=b.messages[0].content;
+      if(instruction.startsWith('Categorize headlines for an AI incident inbox')){
         assert.equal(b.messages.length,2);
-        if(b.messages[0].content.startsWith('Select the search excerpts')){
+        assert.deepEqual(JSON.parse(b.messages[1].content),[{index:0,title:'Fixture AI chatbot data breach'}]);
+        assert.equal(b.stream,true);
+        return send({choices:[{message:{content:'{"items":[{"index":0,"topic":"Security","relevance":"Needs review","verified":true}]}'},finish_reason:'stop'}]});
+      }
+      if(instruction.startsWith('Decide whether')||instruction.startsWith('Select the search excerpts')){
+        assert.equal(b.messages.length,2);
+        assert.equal(b.stream,true);
+        assert.equal(b.max_tokens,8192);
+        const sendDecision=decision=>{
+          res.setHeader('content-type','text/event-stream');
+          const frame=choice=>res.write('data: '+JSON.stringify({choices:[choice]})+'\n\n');
+          const content=JSON.stringify(decision);
+          frame({delta:{reasoning_content:'Fixture reasoning. '.repeat(3000)}});
+          frame({delta:{content:content.slice(0,10)}});
+          frame({delta:{content:content.slice(10)}});
+          frame({delta:{},finish_reason:'stop'});
+          res.end('data: [DONE]\n\n');
+        };
+        if(instruction.startsWith('Select the search excerpts')){
           const input=JSON.parse(b.messages[1].content);
           assert.doesNotMatch(b.messages[1].content,new RegExp(priorTurn));
           const ids=input.sources.filter(s=>s.title!=='Generic category page').map(s=>s.id);
-          return send({choices:[{message:{content:JSON.stringify({sources:ids,complete:ids.length>0,alternate:'untrusted injected query'})},finish_reason:'stop'}]});
+          return sendDecision({sources:ids,complete:ids.length>0,alternate:'untrusted injected query'});
         }
-        assert.match(b.messages[0].content,/Decide whether/);
         const prompt=b.messages[1].content;
         assert.notEqual(prompt,priorTurn);
-        const decision=prompt===longChatPrompt?automaticQuery:prompt===alertPrompt?{query:alertQuery,alternate:alertAlternate}:{query:null};
-        return send({choices:[{message:{content:JSON.stringify(decision)},finish_reason:'stop'}]});
+        if(prompt===longChatPrompt)return sendDecision(automaticQuery);
+        if(prompt===alertPrompt)return sendDecision({query:alertQuery,alternate:alertAlternate});
+        return send({choices:[{message:{content:'{"query":null}'},finish_reason:'stop'}]});
       }
       const content=b.messages.at(-1).content;
       const prompt=content.split('\n\nWeb search ')[0];
@@ -107,6 +152,10 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       if(prompt===failedSearchQuery){
         assert.deepEqual(b.messages[0],searchedInstructions);
         assert.match(content,/could not verify/);
+      }
+      if(prompt===rankedModelsPrompt){
+        assert.equal(b.messages[1].content,priorTurn);
+        assert.match(content,/Fixture search result/);
       }
       if(prompt.endsWith(vaultPrompt)||prompt==='A follow-up without an attachment')vaultChat.push(b.messages);
       assert.equal(b.max_tokens,b.messages.at(-1).content==='Test an explicit response limit'?16384:65536);
@@ -142,7 +191,20 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     const fetchDevice=globalThis.fetch;
     globalThis.fetch=async (input,options)=>{
       const url=new URL(input);
-      if(url.hostname==='127.0.0.1')return fetchDevice(input,options);
+      if(url.hostname==='127.0.0.1'){
+        if(url.pathname==='/v1/chat/completions'&&options?.method==='POST'){
+          const request=JSON.parse(options.body);
+          if(request.messages[0]?.content.startsWith('Decide whether')&&request.messages[1]?.content===${JSON.stringify(timedOutSearchPrompt)}){
+            throw new DOMException('Timed out waiting for Tiiny.', 'TimeoutError');
+          }
+        }
+        return fetchDevice(input,options);
+      }
+      if(url.pathname==='/news/technology/rss.xml'){
+        assert.equal(options.headers,undefined);
+        return new Response('<rss><channel><item><title>Fixture AI chatbot data breach</title><link>https://example.org/eyewall-fixture</link><pubDate>'+new Date(Date.now()-60000).toUTCString()+'</pubDate></item></channel></rss>');
+      }
+      if(options?.redirect==='error'&&options.headers===undefined)return new Response('',{status:503});
       if(['https://feeds.bbci.co.uk','https://www.cbsnews.com'].includes(url.origin)){
         assert.equal(url.search,'');
         assert.deepEqual(Object.keys(options.headers),['Accept']);
@@ -151,7 +213,7 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       }
       assert.equal(url.origin,'https://html.duckduckgo.com');
       const query=url.searchParams.get('q');
-      assert.ok(${JSON.stringify([chatPrompt,vaultPrompt,failedSearchQuery,automaticQuery,alertQuery,alertAlternate])}.includes(query));
+      assert.ok(${JSON.stringify([chatPrompt,vaultPrompt,failedSearchQuery,automaticQuery,alertQuery,alertAlternate,rankedModelsQuery])}.includes(query));
       assert.equal(options.headers.Authorization,undefined);
       assert.equal(options.headers['X-Subscription-Token'],undefined);
       if(query===${JSON.stringify(failedSearchQuery)})return new Response('no results');
@@ -199,6 +261,28 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal((await fetch(base+'/api/run',{method:'POST',body:'{}'})).status,403);
     assert.equal((await fetch(base+'/api/run',{method:'POST',headers:{cookie,origin:'https://example.com'},body:'{}'})).status,403);
     const post=async(p,b)=>(await fetch(base+p,{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify(b)})).json();
+    const atlas=await fetch(base+'/eyewall/');
+    assert.match(await atlas.text(),/Spindle Dashboard/);
+    assert.match(atlas.headers.get('set-cookie'),/HttpOnly/);
+    assert.equal((await fetch(base+'/eyewall/earth.jpg')).headers.get('content-type'),'image/jpeg');
+    assert.equal((await fetch(base+'/api/eyewall/reports')).status,403);
+    const feed=await post('/api/eyewall/refresh',{});
+    assert.equal(feed.reports.length,1);
+    assert.equal(feed.reports[0].url,'https://example.org/eyewall-fixture');
+    assert.equal(feed.sources.filter(source=>source.state==='ok').length,1);
+    const [eyewallModel]=await (await get('/api/eyewall/models')).json();
+    assert.deepEqual(eyewallModel,{model:'test/chat',name:'Chat',provider:'Tiiny',preferred:false});
+    const triaged=await post('/api/eyewall/triage',{model:'test/chat'});
+    assert.equal(triaged.labeled,1);
+    assert.deepEqual(triaged.reports[0].triage,{model:'test/chat',provider:'Tiiny',topic:'Security',relevance:'Needs review'});
+    const localEndpoint=await post('/api/endpoints',{name:'Fixture local model',url:'http://127.0.0.1:'+device.address().port+'/v1',key:'fixture-key'});
+    assert.ok((await (await get('/api/eyewall/models')).json()).some(model=>model.endpointId===localEndpoint.id));
+    const reviewedLocally=await post('/api/eyewall/triage',{model:'test/chat',endpointId:localEndpoint.id});
+    assert.equal(reviewedLocally.labeled,1);
+    assert.equal(reviewedLocally.reports[0].triage.provider,'Fixture local model');
+    assert.equal(reviewedLocally.reports[0].reviewTarget,undefined);
+    assert.equal(JSON.parse(await fs.readFile(path.join(testDir,'eyewall-reports.json'),'utf8')).reports[0].verified,undefined);
+    await post('/api/endpoints/remove',{id:localEndpoint.id});
     assert.deepEqual(await (await get('/api/search/settings')).json(),{braveKeyPresent:false});
     assert.deepEqual(await post('/api/search/settings',{key:'fixture-session-search-key'}),{braveKeyPresent:true});
     assert.ok(!JSON.stringify(await (await get('/api/search/settings')).json()).includes('fixture-session-search-key'));
@@ -485,6 +569,23 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.ok(events.some(([kind,prompt])=>kind==='chat'&&prompt===longChatPrompt));
     const traced=(await trace()).events;
     assert.deepEqual(traced.map(e=>[e.runId,e.kind]),[[fallback.id,'search'],[fallback.id,'chat'],[long.id,'chat'],[long.id,'search'],[long.id,'chat'],[long.id,'chat'],[alert.id,'chat'],[alert.id,'search'],[alert.id,'chat'],[alert.id,'search'],[alert.id,'chat'],[alert.id,'chat'],[fiction.id,'chat'],[fiction.id,'chat']]);
+
+    const ranked=await finish(await post('/api/run',{steps:[{...searchStep,prompt:rankedModelsPrompt,promptMode:'literal',messages:[{role:'user',content:priorTurn}]}]}));
+    assert.equal(ranked.status,'completed',ranked.error);
+    assert.equal(ranked.outputs[0].webSearch?.query,rankedModelsQuery);
+    assert.equal(ranked.outputs[0].webSearch?.sources[0].title,'Fixture search result');
+    const rankedEvents=(await trace()).events.filter(e=>e.runId===ranked.id);
+    assert.deepEqual(rankedEvents.map(e=>e.kind),['search','chat']);
+    assert.deepEqual(rankedEvents[0].sent,['Search query from current prompt']);
+
+    const timedOut=await finish(await post('/api/run',{steps:[{...searchStep,prompt:timedOutSearchPrompt,promptMode:'literal'}]}));
+    assert.equal(timedOut.status,'completed',timedOut.error);
+    assert.equal(timedOut.outputs[0].webSearch,undefined);
+    assert.match(timedOut.outputs[0].webSearchWarning,/timed out while preparing a search query.*Chat options/);
+    assert.ok((await trace()).events.filter(e=>e.runId===timedOut.id).every(e=>e.kind==='chat'));
+    const direct=await finish(await post('/api/run',{steps:[{...searchStep,...withQuery(automaticQuery),prompt:timedOutSearchPrompt,promptMode:'literal'}]}));
+    assert.equal(direct.status,'completed',direct.error);
+    assert.equal(direct.outputs[0].webSearch.query,automaticQuery);
 
     const headlines=await finish(await post('/api/run',{steps:[{...searchStep,prompt:headlinePrompt,promptMode:'literal'}]}));
     assert.equal(headlines.status,'completed',headlines.error);

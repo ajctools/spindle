@@ -113,7 +113,8 @@ async function smokeBrowser(profile){
     // Edge on Windows can re-launch itself under a different PID.
     closeBrowser=()=>call('Browser.close');
     const evaluate=async expression=>{
-      const {result,exceptionDetails}=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});
+      const {result,exceptionDetails}=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true})
+        .catch(error=>{throw Error(`${error.message} while evaluating ${expression.slice(0,180)}`,{cause:error});});
       assert.ok(!exceptionDetails,exceptionDetails?.exception?.description??expression);
       return result.value;
     };
@@ -124,6 +125,42 @@ async function smokeBrowser(profile){
     const navigate=page=>click(`#nav [data-page="${page}"]`);
     const fit=label=>evaluate('document.documentElement.scrollWidth <= innerWidth+1').then(value=>assert.ok(value,`${label} overflows the viewport`));
     await call('Runtime.enable');
+    await call('Page.enable');
+    const projectFixture=await call('Page.addScriptToEvaluateOnNewDocument',{source:`{
+      localStorage.removeItem('spindle-last-chat-run');
+      window.syntheticProjectFixture=true;
+      const previousFetch=window.fetch.bind(window);
+      const checkpoint={id:'saved-gpu',title:'GPU shortlist',brief:'Keep cooling below the limit.',result:'Longer GPU reply',sources:[],savedAt:'2026-01-01'};
+      const project={id:'fixture-project',name:'Personal graphics hardware research',checkpoints:[checkpoint]};
+      window.fetch=async (url,options)=>{
+        if(url==='/api/state')return Response.json({...await (await previousFetch(url,options)).json(),demo:false});
+        if(url==='/api/projects')return Response.json([{id:project.id,name:project.name,count:1}]);
+        if(url==='/api/projects?id='+project.id)return Response.json(project);
+        return previousFetch(url,options);
+      };
+    }`});
+    await call('Emulation.setDeviceMetricsOverride',{width:320,height:568,deviceScaleFactor:1,mobile:false});
+    await call('Page.navigate',{url:origin});
+    await waitForElement('#chat-project').catch(async error=>{
+      const status=await evaluate(`(async()=>({banner:document.querySelector('#banner')?.textContent,view:document.querySelector('#breadcrumb')?.textContent,
+        error:await import('/project-memory.mjs').then(()=>null,error=>String(error)),fixture:!!window.syntheticProjectFixture,
+        demo:(await (await fetch('/api/state')).json()).demo,mode:!!document.querySelector('#workspace-mode')}))()`);
+      throw Error(`${error.message}: ${JSON.stringify(status)} ${errors.join(' ')}`);
+    });
+    await click('#chat-project');
+    await waitForElement('[data-project-action="view"]');
+    await click('[data-project-action="view"]');
+    await waitForElement('[data-project-action="latest"]');
+    await fit('Project picker at 320px');
+    await click('[data-project-action="latest"]');
+    await waitFor('checkpoint resume',()=>evaluate(`${$('#project-memory-label')}?.textContent.includes('GPU shortlist') && !${$('#project-dialog')}.open`));
+    await fit('Project composer at 320px');
+    await click('#toggle-project-memory');
+    await click('#toggle-project-memory');
+    assert.equal(await evaluate(`${$('#project-memory-label')}.textContent`),'Project recall paused');
+    console.log('Project browser checks passed at 320px.');
+    await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:projectFixture.identifier});
+    await call('Emulation.clearDeviceMetricsOverride');
     await call('Page.navigate',{url:origin});
     await waitForElement('#workspace-mode');
     assert.ok(await evaluate(`${$('#demo-notice')}.textContent.includes('SYNTHETIC MODELS')`),'Synthetic preview is required');
@@ -139,8 +176,22 @@ async function smokeBrowser(profile){
       }
     }
     await evaluate(`(()=>{const select=${$('#workspace-mode')};select.value='chat';select.dispatchEvent(new Event('change'));})()`);
+    await call('Emulation.setDeviceMetricsOverride',{width:320,height:568,deviceScaleFactor:1,mobile:false});
+    await click('#mobile-wordmark');
+    assert.ok(await visible('.focus-wordmark .focus-label'),'The mobile wordmark should show the Focus label');
+    assert.ok(await evaluate(`(()=>{
+      const readings=[...document.querySelectorAll('.pulse-metric b')];
+      const previous=readings.map(reading=>reading.textContent);
+      for(const reading of readings)reading.textContent='100%';
+      const fits=${$('.focus-label')}.getBoundingClientRect().right <= ${$('.pulse-metrics')}.getBoundingClientRect().left;
+      readings.forEach((reading,i)=>{reading.textContent=previous[i];});
+      return fits;
+    })()`),'The Focus label should fit beside the gauges at 320px with full readings');
+    await click('#exit-focus');
+    await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
     await evaluate(`${$('#desktop-wordmark')}.dispatchEvent(new MouseEvent('click',{detail:2,bubbles:true,cancelable:true}));`);
     assert.ok(await visible('.focus-mode .focus-wordmark'),'Desktop wordmark should open Focus');
+    assert.ok(await visible('.focus-wordmark .focus-label'),'The desktop wordmark should show the Focus label');
     assert.ok(!await visible('.sidebar'),'Focus should hide the desktop sidebar');
     assert.ok(await evaluate(`(()=>{
       const title=${$('.focus-wordmark')}.getBoundingClientRect();
@@ -161,6 +212,7 @@ async function smokeBrowser(profile){
     await waitFor('the desktop prompt to expand',()=>evaluate(`${$('#prompt')}.clientHeight>innerHeight*.35`));
     await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));");
     assert.ok(!await visible('.focus-mode .focus-wordmark'),'Escape should exit Focus');
+    assert.ok(!await visible('.focus-wordmark .focus-label'),'The Focus label should disappear on exit');
     assert.equal(await evaluate(`${$('#prompt')}.value`),'Keep this draft.');
     assert.ok(await evaluate('window.focusStorageBefore===JSON.stringify(Object.entries(localStorage))'),'Focus and its unsent draft should stay out of browser storage');
     await click('#enter-focus');
@@ -205,25 +257,27 @@ async function smokeBrowser(profile){
       '```text',diagram,'```','',
     ].join('\r\n');
     const sections='SECTION B — Timing\n\nSaturday.\n\nSECTION C — Storage\n\nUse the shelf.\n\nSECTION D — Follow-up\n\nSend a note.';
-    await call('Page.enable');
     await call('Page.addScriptToEvaluateOnNewDocument',{source:`{
       const run={id:${JSON.stringify(runId)},name:'Chat & vision',status:'running',phase:'Thinking',keepChatModel:true,
         startedAt:new Date().toISOString(),steps:[{task:'chat',promptMode:'literal',model:'demo/chat',prompt:'Summarize the pickup.'}],outputs:[]};
       const initial=${JSON.stringify(formatted)},final=initial+'\\n'+${JSON.stringify(sections)};
+      const reasoning=Array.from({length:75},(_,i)=>'Synthetic reasoning line '+i).join('\\n');
       localStorage.setItem('spindle-last-chat-run',run.id);
       window.advanceSyntheticReply=phase=>{
-        if(phase===2){run.status='completed';run.outputs=[{task:'chat',model:'demo/chat',text:final}];delete run.partial;}
-        else run.partial={task:'chat',model:'demo/chat',text:phase?initial+'\\nSECTION B — Timing':initial,reasoning:'Synthetic reasoning '+phase};
+        if(phase===2){run.status='completed';run.outputs=[{task:'chat',model:'demo/chat',text:final,reasoning}];delete run.partial;}
+        else run.partial={task:'chat',model:'demo/chat',text:phase?initial+'\\nSECTION B — Timing':initial,reasoning:reasoning+(phase?'\\nAdditional thought':'')};
       };
       window.advanceSyntheticReply(0);
       const fetchFromServer=window.fetch.bind(window);
       let nextRun;
       window.fetch=(url,...args)=>{
+        if(url==='/api/endpoints')return Promise.resolve(Response.json([{id:'fixture-endpoint',name:'Fixture provider',url:'https://example.test/v1',models:['demo/chat'],keyPresent:true}]));
         if(url==='/api/run'){
           if(window.rejectNextFocusSend){
             window.rejectNextFocusSend=false;
             return Promise.resolve(Response.json({error:'Synthetic send rejected.'},{status:409}));
           }
+          window.submittedFixture=JSON.parse(args[0].body);
           nextRun={...run,id:'29c68a10-70e4-49b5-a532-c90699b941da',status:'queued',outputs:[]};
           return Promise.resolve(Response.json(nextRun));
         }
@@ -252,12 +306,17 @@ async function smokeBrowser(profile){
     assert.ok(!await visible('#chat-history .from-user'),'Read should hide the earlier conversation');
     assert.ok(await visible('[data-chat-live] .chat-code'),'Read should display the streaming response');
     await fit('Focus with a streaming reply at 320px');
-    await evaluate(`window.firstChatBlock=${$('[data-chat-live] h2')}; window.advanceSyntheticReply(1);`);
+    await click('#output [data-reasoning] summary');
+    await evaluate(`window.firstChatBlock=${$('[data-chat-live] h2')};window.firstThinking=${$('#output [data-reasoning]')};
+      ${$('#conversation')}.scrollTop=800;window.readingTop=${$('#conversation')}.scrollTop;window.advanceSyntheticReply(1);`);
     await waitFor('formatted streaming update',()=>evaluate(`document.querySelectorAll('[data-chat-live] h2').length===2`));
     assert.ok(await evaluate(`window.firstChatBlock===${$('[data-chat-live] h2')}`),'Streaming replaced an unchanged heading');
+    assert.ok(await evaluate(`window.firstThinking===${$('#output [data-reasoning]')} && window.firstThinking.open &&
+      window.readingTop>=800 && Math.abs(${$('#conversation')}.scrollTop-window.readingTop)<10`),'Streaming reset the open Thinking panel or reading position');
     await evaluate('window.advanceSyntheticReply(2)');
     await waitForElement('#chat-history .chat-outline');
     assert.ok(await visible('#chat-history .chat-outline'),'Read should display the completed response');
+    assert.ok(await evaluate(`${$('#chat-history [data-reasoning]')}.open && ${$('#conversation')}.scrollTop>700`),'Completing a stream reset the open Thinking panel');
     assert.ok(!await visible('.focus-run-bar'),'The compact run bar should clear when the response completes');
     assert.ok(!await visible('#task-form')&&!await visible('#chat-run-stats'),'Completed replies should have the reading space to themselves');
     await click('#focus-chat');
@@ -293,13 +352,26 @@ async function smokeBrowser(profile){
     await click('#run-task');
     await waitFor('rejected Send to restore the Focus composer',()=>evaluate(`${$('#action-error')}.textContent.includes('Synthetic send rejected.') && !!${$('#prompt')}.getClientRects().length`));
     assert.equal(await evaluate(`${$('#prompt')}.value`),'Check the pickup time again.');
-    await click('#run-task');
+    await evaluate(`${$('#prompt')}.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true}));`);
     await waitForElement('.focus-reading #stop-current');
     assert.ok(!await visible('#focus-compose')&&!await visible('#prompt'),'Sending should return to reading and hide the editor');
     await click('#focus-stop');
     assert.equal(await evaluate('window.stoppedFocusRun'),'29c68a10-70e4-49b5-a532-c90699b941da');
+    await click('#exit-focus');
+    await navigate('device');
+    assert.match(await evaluate(`${$('#breadcrumb')}.textContent`),/^Settings/);
+    await click('[data-device-section="endpoints"]');
+    assert.ok(await visible('[data-endpoint-form]'));
+    await click('#open-endpoint-chat');
+    await evaluate(`${$('#model')}.querySelector('[data-endpoint]').selected=true; ${$('#model')}.dispatchEvent(new Event('change'));`);
+    assert.match(await evaluate(`${$('#chat-endpoint-notice')}.textContent`),/Fixture provider/);
+    assert.ok(!await visible('#send-tiiny-only')&&!await visible('#attach-image'));
+    await evaluate(`${$('#prompt')}.value='Test external chat'; ${$('#prompt')}.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',metaKey:true,bubbles:true,cancelable:true}));`);
+    await waitFor('a custom endpoint submission',()=>evaluate('window.submittedFixture?.endpointId==="fixture-endpoint"'));
+    assert.equal(await evaluate('window.submittedFixture.steps[0].model'),'demo/chat');
+
     assert.deepEqual(errors,[],'Browser exceptions');
-    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, navigation, device settings, dialogs, cost filters, meeting drafts, Focus, and streaming chat formatting and copy.');
+    console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, project resume and pause, navigation, device settings, dialogs, cost filters, meeting drafts, Focus, and streaming chat formatting and copy.');
   }finally{
     if(ws?.readyState===WebSocket.OPEN)await closeBrowser?.().catch(()=>{});
     ws?.close();

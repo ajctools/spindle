@@ -46,6 +46,16 @@
 }
 
 .focus-wordmark span { color: var(--accent); }
+.focus-wordmark .focus-label {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #c9f79913;
+  font-size: 12px;
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+
 .focus-mode .pulse-metrics { justify-self: end; }
 .focus-mode .device-pulse::before {
   content: '';
@@ -57,9 +67,12 @@
   pointer-events: none;
 }
 
-.focus-mode .device-pulse .pulse-job {
+.focus-mode .device-pulse .pulse-actions {
   grid-area: 2 / 1;
   max-width: none;
+  margin: 0;
+}
+.focus-mode .device-pulse .pulse-job {
   min-width: 0;
   min-height: 46px;
   margin: 0;
@@ -205,6 +218,11 @@
 
 @media (max-width: 365px) {
   .topbar #mobile-wordmark:enabled { display: block; font-size: 18px; }
+  .focus-mode .focus-wordmark { gap: 4px; font-size: 18px; }
+  .focus-wordmark .focus-label { padding-inline: 4px; }
+  .focus-mode .pulse-metrics { gap: 4px; }
+  .focus-mode .pulse-metric { gap: 3px; }
+  .focus-mode .pulse-metric > svg:first-child { width: 16px; }
 }
 
 @media (max-height: 520px) {

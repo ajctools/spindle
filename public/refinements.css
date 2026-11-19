@@ -123,6 +123,23 @@
 #vault-attached button{padding:2px 8px}
 #vault-dialog{width:min(640px,92vw);padding:clamp(16px,4vw,28px)}
 #vault-dialog::backdrop{background:#0009}
+.project-dialog{width:min(640px,92vw);max-height:90dvh;overflow:auto;padding:clamp(16px,4vw,28px)}
+.project-dialog header{justify-content:space-between;align-items:center}
+.project-dialog .actions{flex-wrap:wrap}
+.project-dialog h2,.project-dialog h3{margin:0}
+.project-dialog [data-project-body],.project-form{display:grid;gap:12px}
+.project-dialog .project-form .field{margin:0}
+.project-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
+.project-list li{display:flex;gap:10px;align-items:center}
+.project-list .button,#chat-project{min-width:0;overflow-wrap:anywhere;white-space:normal;text-align:left}
+#chat-project{max-width:32ch}
+.project-original{max-height:35dvh;overflow:auto;overflow-wrap:anywhere}
+.project-memory-used{margin-top:8px;overflow-wrap:anywhere}
+#project-memory-status{margin:4px 0;overflow-wrap:anywhere}
+@media(max-width:620px){
+  .chat-workspace .workspace-toolbar .actions{flex-wrap:wrap;justify-content:flex-end}
+  #chat-project{max-width:17ch}
+}
 #vault-status{margin-top:12px}
 #vault-results article{padding:12px 0;border-top:1px solid var(--line)}
 #vault-results pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:16rem;overflow:auto;margin:0 0 10px}
@@ -228,4 +245,53 @@
 }
 @media (max-width:1119px) {
   #chat-app-preview {width:100%;border-left:0}
+}
+
+.pulse-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 47%;
+}
+.pulse-actions .pulse-job { max-width: none; margin: 0; }
+.eyewall-pulse {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #8edce34a;
+  border-radius: 50%;
+  background: #12232c;
+  color: #a1e3dd;
+}
+.eyewall-pulse:hover { border-color: #8edce3; color: #d1f9f5; }
+.eyewall-pulse.unread { border-color: #8edce3; animation: eyewall-unread 2.8s ease-in-out infinite; }
+.eyewall-pulse.unread::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid #12232c;
+  border-radius: 50%;
+  background: #8edce3;
+}
+@keyframes eyewall-unread {
+  0%, 100% { box-shadow: 0 0 0 0 #8edce300; }
+  50% { box-shadow: 0 0 0 4px #8edce326, 0 0 18px #8edce344; }
+}
+.still .eyewall-pulse { animation: none; }
+.creating .eyewall-pulse { width: 30px; height: 30px; }
+@media (max-width: 700px) {
+  .pulse-actions { max-width: none; margin-left: auto; gap: 6px; }
+  .eyewall-pulse { width: 30px; height: 30px; }
+  .working .pulse-actions { flex-basis: 100%; }
+  .focus-mode .working .pulse-actions { flex-basis: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eyewall-pulse { animation: none !important; }
 }

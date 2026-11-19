@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
-import {normalizeConnection,deviceURL,publicConnection} from '../connection.mjs';
+import {normalizeConnection,deviceURL,publicConnection,createTiinyRelay} from '../connection.mjs';
 
 test('endpoint parsing preserves API prefixes and rejects credential leaks across origins',()=>{
   const c=normalizeConnection({endpoint:'http://192.0.2.10/openai/v1/',key:'secret'});
@@ -16,6 +16,43 @@ test('endpoint parsing preserves API prefixes and rejects credential leaks acros
   assert.ok(!JSON.stringify(publicConnection(c,'test')).includes('secret'));
   for(const endpoint of ['https://user:password@example.com','https://example.com?key=abc','file:///etc/passwd'])assert.throws(()=>normalizeConnection({endpoint,key:'a'}));
   assert.throws(()=>normalizeConnection({endpoint:'http://192.0.2.10',nativeEndpoint:'https://other.example/v1',key:'a'}),/same origin/);
+});
+
+test('Tiiny USB relay keeps the saved device identity and falls back only after a Tiiny API probe',async()=>{
+  const connection=normalizeConnection({endpoint:'http://192.0.2.10/custom/v1',key:'owner-key'});
+  const relayOrigin='http://127.0.0.1:18438';
+  const target=deviceURL(connection,'/api/v1/models/?view=full');
+  const probes=[];
+  let clock=1,lanOnline=true,usbOnline=true;
+  const relay=createTiinyRelay({endpoint:connection.endpoint,origin:relayOrigin},{
+    now:()=>clock,
+    async request(url,options){
+      probes.push(url);
+      assert.deepEqual(options.headers,{Host:'openai.api.tiiny'});
+      assert.equal(options.redirect,'error');
+      if(url.startsWith(connection.url)?lanOnline:usbOnline){
+        return Response.json({error:'unauthorized',reason:'missing_token'},{status:401});
+      }
+      return new Response('Other service',{status:401});
+    },
+  });
+  assert.equal(await relay.target(connection,target),target);
+  lanOnline=false;
+  relay.invalidate();
+  const routed=relayOrigin+'/api/v1/models/?view=full';
+  assert.deepEqual(await Promise.all([relay.target(connection,target),relay.target(connection,target)]),[routed,routed]);
+  assert.deepEqual(probes,[connection.endpoint+'/models',connection.endpoint+'/models',relayOrigin+'/custom/v1/models']);
+  const other={...connection,endpoint:connection.url+'/other/v1'};
+  assert.equal(await relay.target(other,target),target);
+  lanOnline=true;
+  assert.equal(await relay.target(connection,target),routed);
+  clock+=15000;
+  assert.equal(await relay.target(connection,target),target);
+  lanOnline=false;
+  usbOnline=false;
+  relay.invalidate();
+  assert.equal(await relay.target(connection,target),target);
+  assert.throws(()=>createTiinyRelay({endpoint:connection.endpoint,origin:'http://192.0.2.20:18438'}),/loopback/);
 });
 test('new owners can test, save, reconnect, and reset without a Tiiny CLI installation',async()=>{
   const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),data=await fs.mkdtemp(path.join(root,'test','.runtime-'));
