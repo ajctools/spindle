@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {networkInterfaces} from 'node:os';
+import {createConnection} from 'node:net';
 import {createTiinyRelayProxy} from '../scripts/tiiny-usb-relay.mjs';
 
 test('travel relay reconnects through available adapters and probes before forwarding credentials',async()=>{
-  const forwarded=[];
+  const forwarded=[],probedAdapters=[],connectedAdapters=[];
   let tiiny=true;
   const device=http.createServer(async(req,res)=>{
     res.setHeader('Content-Type','application/json');
@@ -21,14 +21,24 @@ test('travel relay reconnects through available adapters and probes before forwa
     forwarded.push({authorization:req.headers.authorization,url:req.url,body,source:req.socket.remoteAddress});
     res.end('{"ok":true}');
   });
-  await new Promise(resolve=>device.listen(0,'127.0.0.2',resolve));
-  const loopback=Object.values(networkInterfaces()).flat().find(adapter=>adapter.address==='127.0.0.1');
-  const network={...loopback,internal:false};
+  const realLoopback='127.0.0.1';
+  await new Promise(resolve=>device.listen(0,realLoopback,resolve));
+  const network={address:realLoopback,internal:false,netmask:[255,0,0,0].join('.')};
   const usb={...network,address:'127.0.0.3'};
   let adapters=[network];
   const relay=createTiinyRelayProxy({
     targets:[{host:'127.0.0.2',localAddress:usb.address},{host:'127.0.0.2'}],
     interfaces:()=>({test:adapters}),devicePort:device.address().port,log:()=>{},
+    // macOS need not provision extra loopback aliases. Use a real HTTP
+    // fixture on the assigned address while observing the logical adapters.
+    deviceGet(options,handle){
+      probedAdapters.push(options.localAddress);
+      return http.get({...options,host:realLoopback,localAddress:realLoopback},handle);
+    },
+    deviceConnect(options){
+      connectedAdapters.push(options.localAddress);
+      return createConnection({...options,host:realLoopback,localAddress:realLoopback});
+    },
   });
   await new Promise(resolve=>relay.listen(0,'127.0.0.1',resolve));
   const send=()=>new Promise((resolve,reject)=>{
@@ -44,15 +54,16 @@ test('travel relay reconnects through available adapters and probes before forwa
   });
   try{
     assert.deepEqual(await send(),{ok:true});
-    assert.equal(forwarded[0].source,network.address);
+    assert.deepEqual([probedAdapters.at(-1),connectedAdapters.at(-1)],[network.address,network.address]);
     adapters=[usb,network];
     assert.deepEqual(await send(),{ok:true});
-    assert.equal(forwarded[1].source,usb.address);
+    assert.deepEqual([probedAdapters.at(-1),connectedAdapters.at(-1)],[usb.address,usb.address]);
     adapters=[];
     await assert.rejects(send());
     adapters=[network];tiiny=false;
     await assert.rejects(send());
     assert.equal(forwarded.length,2);
+    assert.equal(connectedAdapters.length,2);
     tiiny=true;
     assert.deepEqual(await send(),{ok:true});
     assert.equal(forwarded.length,3);

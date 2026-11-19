@@ -12,9 +12,9 @@ function sameSubnet(left,right,mask){
   return (ipv4Number(left)&ipv4Number(mask))===(ipv4Number(right)&ipv4Number(mask));
 }
 
-function probeTiiny({host,localAddress},port){
+function probeTiiny({host,localAddress},port,deviceGet){
   return new Promise(resolve=>{
-    const request=http.get({host,port,localAddress,path:'/v1/models',headers:{Host:'openai.api.tiiny',Connection:'close'}},response=>{
+    const request=deviceGet({host,port,localAddress,path:'/v1/models',headers:{Host:'openai.api.tiiny',Connection:'close'}},response=>{
       let body='';
       response.on('data',chunk=>{
         body+=chunk;
@@ -34,7 +34,7 @@ function probeTiiny({host,localAddress},port){
   });
 }
 
-export function createTiinyRelayProxy({targets,interfaces=networkInterfaces,devicePort=80,log=console.log}){
+export function createTiinyRelayProxy({targets,interfaces=networkInterfaces,devicePort=80,deviceGet=http.get,deviceConnect=createConnection,log=console.log}){
   let lastRoute='';
   return createServer(async client=>{
     client.on('error',()=>{});
@@ -46,7 +46,7 @@ export function createTiinyRelayProxy({targets,interfaces=networkInterfaces,devi
         (!target.localAddress||candidate.address===target.localAddress)&&sameSubnet(candidate.address,target.host,candidate.netmask));
       if(!adapter)continue;
       const candidate={host:target.host,localAddress:adapter.address};
-      if(await probeTiiny(candidate,devicePort)){destination=candidate;break;}
+      if(await probeTiiny(candidate,devicePort,deviceGet)){destination=candidate;break;}
       if(client.destroyed)return;
     }
     if(!destination){
@@ -56,7 +56,7 @@ export function createTiinyRelayProxy({targets,interfaces=networkInterfaces,devi
     if(client.destroyed)return;
     const route=destination.host+' via '+destination.localAddress;
     if(lastRoute!==route){log('Tiiny route available through the traveling computer.');lastRoute=route;}
-    const device=createConnection({...destination,port:devicePort});
+    const device=deviceConnect({...destination,port:devicePort});
     const deadline=setTimeout(()=>device.destroy(),1500);
     device.once('connect',()=>clearTimeout(deadline));
     device.once('close',()=>{clearTimeout(deadline);client.destroy();});
