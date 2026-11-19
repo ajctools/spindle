@@ -57,6 +57,7 @@ const gateway=http.createServer((req,res)=>{
   res.end(JSON.stringify(value));
 });await new Promise(resolve=>gateway.listen(0,'127.0.0.1',resolve));
 const env={...process.env,SPINDLE_PORT:process.env.SPINDLE_DEMO_PORT || '8438',SPINDLE_DATA_DIR:data,TIINY_CONFIG:path.join(data,'no-cli-config.json'),TIINY_HOST:'http://127.0.0.1:'+gateway.address().port,TIINY_KEY:'demo-only-not-a-real-device-key',SPINDLE_DEMO:'1'};
+env.SPINDLE_DEMO_STORM_RING=process.argv.includes('--storm-ring')?'1':'0';
 const app=spawn(process.execPath,['server.mjs'],{cwd:root,env,stdio:'inherit',windowsHide:true});
 console.log('READ-ONLY DEMO: all models, usage and performance are fictional. No Tiiny connection is used.');
 let stopping=false;async function stop(){if(stopping)return;stopping=true;app.kill();gateway.close();if(path.dirname(data)===path.resolve(os.tmpdir())&&path.basename(data).startsWith('spindle-demo-'))await fs.rm(data,{recursive:true,force:true});}

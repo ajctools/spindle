@@ -1,14 +1,16 @@
 const known=n=>typeof n==='number'&&Number.isFinite(n);
-async function watchEyewall(link,api){
-  const preferences=await import('./eyewall/read-state.mjs').catch(()=>null);
+async function watchStormRing(link,api){
+  const preferences=await import('./storm-ring/read-state.mjs').catch(()=>null);
   if(!preferences)return;
-  const {seenKey,autoRefreshKey,unreadReports,autoRefreshEnabled,refreshIsDue}=preferences;
-  let snapshot,reading=false;
+  const {seenKey,autoRefreshKey,unreadReports,newestUnreadReport,reportFragment,autoRefreshEnabled,autoReviewRoute,refreshIsDue}=preferences;
+  let snapshot,reading=false,simulationPoll;
   link.hidden=false;
   function showUnread(){
-    const unread=unreadReports(snapshot?.reports??[]);
-    link.classList.toggle('unread',unread>0);
-    const label=unread?'Eyewall · '+unread+' unread '+(unread===1?'report':'reports'):'Eyewall live reports';
+    const reports=snapshot?.reports??[];
+    const unread=unreadReports(reports), newest=newestUnreadReport(reports);
+    link.classList.toggle('unread',Boolean(unread));
+    link.href='/storm-ring/'+reportFragment(newest?.id);
+    const label=unread?'Storm Ring · '+unread+' unread '+(unread===1?'report':'reports')+' · Open newest':'Storm Ring live reports';
     link.setAttribute('aria-label',label);
     link.title=label;
   }
@@ -16,11 +18,19 @@ async function watchEyewall(link,api){
     if(reading||document.hidden)return;
     reading=true;
     try{
-      snapshot=await api('/api/eyewall/reports');
+      snapshot=await api('/api/storm-ring/reports');
       showUnread();
+      if(snapshot.simulation&&!snapshot.reports.length&&!simulationPoll)simulationPoll=setInterval(check,1000);
+      else if(snapshot.reports.length&&simulationPoll){clearInterval(simulationPoll);simulationPoll=null;}
       if(autoRefreshEnabled()&&refreshIsDue(snapshot)){
-        snapshot=await api('/api/eyewall/refresh',{});
+        const lastAttempt=snapshot.lastAttempt;
+        snapshot=await api('/api/storm-ring/refresh',{});
         showUnread();
+        const route=autoReviewRoute();
+        if(route&&snapshot.lastAttempt!==lastAttempt&&snapshot.reports.some(report=>report.firstSeenAt===snapshot.lastAttempt)){
+          snapshot=await api('/api/storm-ring/triage',route);
+          showUnread();
+        }
       }
     }catch{}finally{reading=false;}
   }
@@ -35,11 +45,11 @@ async function watchEyewall(link,api){
 }
 export function startDevicePulse({api,getState,navigate}){
   const root=document.getElementById('device-pulse');if(!root)return;
-  root.innerHTML=`<div class="focus-wordmark"><span aria-hidden="true">✳</span>spindle <span class="focus-label">Focus</span></div><div class="pulse-metrics">${['NPU','CPU','RAM'].map((label,i)=>`<div class="pulse-metric" data-sensor="${['npuActivity','cpu','ram'][i]}"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="pulse-track" cx="18" cy="18" r="15.5"/><circle class="pulse-value" cx="18" cy="18" r="15.5" pathLength="100"/></svg><span><small>${label}</small><b>—</b></span><svg class="pulse-trace" viewBox="0 0 90 28" aria-hidden="true"><polyline/></svg></div>`).join('')}</div><div class="pulse-actions"><a class="eyewall-pulse" id="eyewall-pulse" href="/eyewall/#live" aria-label="Eyewall live reports" title="Eyewall live reports" hidden><span class="eyewall-mark" aria-hidden="true"><i></i></span></a><button class="pulse-job" id="pulse-job" type="button"><span class="pulse-orbit" aria-hidden="true">✳</span><span><b class="focus-idle-label">Chat &amp; vision</b><b id="pulse-title">Your Tiiny, in view</b><small id="pulse-detail">Waiting for a device sample…</small></span><span id="pulse-percent"></span></button></div><div class="focus-tools"><div class="focus-views" role="group" aria-label="Focus view"><button class="button quiet" id="focus-chat" type="button" aria-pressed="true">Chat</button><button class="button quiet" id="focus-read" type="button" aria-pressed="false">Read</button></div><button class="button quiet" id="exit-focus" type="button" aria-label="Exit Focus"><span aria-hidden="true">↙</span> Exit</button></div>`;
+  root.innerHTML=`<div class="focus-wordmark"><span aria-hidden="true">✳</span>spindle <span class="focus-label">Focus</span></div><div class="pulse-metrics">${['NPU','CPU','RAM'].map((label,i)=>`<div class="pulse-metric" data-sensor="${['npuActivity','cpu','ram'][i]}"><svg viewBox="0 0 36 36" aria-hidden="true"><circle class="pulse-track" cx="18" cy="18" r="15.5"/><circle class="pulse-value" cx="18" cy="18" r="15.5" pathLength="100"/></svg><span><small>${label}</small><b>—</b></span><svg class="pulse-trace" viewBox="0 0 90 28" aria-hidden="true"><polyline/></svg></div>`).join('')}</div><div class="pulse-actions"><a class="storm-ring-pulse" id="storm-ring-pulse" href="/storm-ring/#live" aria-label="Storm Ring live reports" title="Storm Ring live reports" hidden><span class="storm-ring-mark" aria-hidden="true"><i></i></span></a><button class="pulse-job" id="pulse-job" type="button"><span class="pulse-orbit" aria-hidden="true">✳</span><span><b class="focus-idle-label">Chat &amp; vision</b><b id="pulse-title">Your Tiiny, in view</b><small id="pulse-detail">Waiting for a device sample…</small></span><span id="pulse-percent"></span></button></div><div class="focus-tools"><div class="focus-views" role="group" aria-label="Focus view"><button class="button quiet" id="focus-chat" type="button" aria-pressed="true">Chat</button><button class="button quiet" id="focus-read" type="button" aria-pressed="false">Read</button></div><button class="button quiet" id="exit-focus" type="button" aria-label="Exit Focus"><span aria-hidden="true">↙</span> Exit</button></div>`;
   const title=root.querySelector('#pulse-title'),detail=root.querySelector('#pulse-detail');let busy=false,reading=false,lastAt=null;
-  void watchEyewall(root.querySelector('#eyewall-pulse'),api);
+  void watchStormRing(root.querySelector('#storm-ring-pulse'),api);
   root.querySelector('#pulse-job').onclick=()=>navigate(busy?'library':'dashboard');
   window.addEventListener('spindle:run',e=>{const j=e.detail,offline=getState()?.offline;busy=!!j;root.classList.toggle('working',busy);title.textContent=j?j.name:offline?'Device API unavailable':'Your Tiiny is ready';detail.textContent=j?(j.phase||j.status):offline?'Check Connection':lastAt?'Live hardware · '+new Date(lastAt).toLocaleTimeString():'Waiting for a device sample…';root.querySelector('#pulse-percent').textContent=known(j?.progress)?Math.round(j.progress)+'%':'';root.setAttribute('aria-label',busy?'Device activity: '+title.textContent:'Live device hardware');});
-  async function sample(){if(reading||document.hidden||!getState())return;reading=true;try{const s=await api('/api/telemetry');if(s.error)throw new Error(s.error);lastAt=s.at;root.classList.remove('stale');root.title='Live device readings · '+new Date(s.at).toLocaleTimeString();for(const key of ['npuActivity','cpu','ram']){const item=root.querySelector(`[data-sensor="${key}"]`),value=s[key];item.querySelector('b').textContent=known(value)?Math.round(value)+'%':'—';item.title=known(value)?`${key==='npuActivity'?'NPU activity':key.toUpperCase()}: ${value.toFixed(1)}%`:'Not reported by this firmware';item.querySelector('.pulse-value').style.strokeDashoffset=known(value)?String(100-Math.max(0,Math.min(100,value))):'100';const history=(s.history||[]).slice(-24);let from=0;for(let i=0;i<history.length;i++){if(!known(history[i][key]))from=i+1;else if(i&&Date.parse(history[i].at)-Date.parse(history[i-1].at)>20000)from=i;}const segment=history.slice(from);item.querySelector('polyline').setAttribute('points',segment.map((p,i)=>`${i/Math.max(1,segment.length-1)*90},${26-Math.max(0,Math.min(100,p[key]))*.24}`).join(' '));}if(!busy)detail.textContent='Live hardware · '+new Date(s.at).toLocaleTimeString();window.dispatchEvent(new CustomEvent('spindle:telemetry',{detail:s}));}catch{root.classList.add('stale');root.title=lastAt?'Last sample '+new Date(lastAt).toLocaleTimeString()+' · live feed unavailable':'Live hardware unavailable';if(!busy)detail.textContent=lastAt?'Readings are stale · reconnect to refresh':'Hardware not reported · check Connection';}finally{reading=false;}}
+  async function sample(){if(reading||document.hidden||!getState())return;reading=true;try{const s=await api('/api/telemetry');if(s.error)throw new Error(s.error);lastAt=s.at;root.classList.remove('stale');root.classList.add('tiiny-live');root.title='Live device readings · '+new Date(s.at).toLocaleTimeString();for(const key of ['npuActivity','cpu','ram']){const item=root.querySelector(`[data-sensor="${key}"]`),value=s[key];item.querySelector('b').textContent=known(value)?Math.round(value)+'%':'—';item.title=known(value)?`${key==='npuActivity'?'NPU activity':key.toUpperCase()}: ${value.toFixed(1)}%`:'Not reported by this firmware';item.querySelector('.pulse-value').style.strokeDashoffset=known(value)?String(100-Math.max(0,Math.min(100,value))):'100';const history=(s.history||[]).slice(-24);let from=0;for(let i=0;i<history.length;i++){if(!known(history[i][key]))from=i+1;else if(i&&Date.parse(history[i].at)-Date.parse(history[i-1].at)>20000)from=i;}const segment=history.slice(from);item.querySelector('polyline').setAttribute('points',segment.map((p,i)=>`${i/Math.max(1,segment.length-1)*90},${26-Math.max(0,Math.min(100,p[key]))*.24}`).join(' '));}if(!busy)detail.textContent='Live hardware · '+new Date(s.at).toLocaleTimeString();window.dispatchEvent(new CustomEvent('spindle:telemetry',{detail:s}));}catch{root.classList.add('stale');root.classList.remove('tiiny-live');root.title=lastAt?'Last sample '+new Date(lastAt).toLocaleTimeString()+' · live feed unavailable':'Live hardware unavailable';if(!busy)detail.textContent=lastAt?'Readings are stale · reconnect to refresh':'Hardware not reported · check Connection';}finally{reading=false;}}
   const timer=setInterval(sample,5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void sample();});window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});void sample();
 }

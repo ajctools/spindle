@@ -1,0 +1,33 @@
+.storm-ring-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  color: inherit;
+}
+.storm-ring-mark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 20deg, currentColor 0deg 48deg, transparent 48deg 60deg);
+  mask-image: radial-gradient(circle, transparent 0 61%, #000 62% 70%, transparent 71%);
+  opacity: .78;
+}
+.storm-ring-mark > i {
+  display: grid;
+  place-items: center;
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: 72% 24%;
+  transform: rotate(45deg);
+}
+.storm-ring-mark > i::after {
+  content: '';
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}

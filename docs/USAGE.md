@@ -80,17 +80,23 @@ The presets link to [Anthropic pricing](https://platform.claude.com/docs/en/abou
 
 This estimates potential API spend avoided. Providers tokenize differently and models differ in capability. It is not an equivalent-result quote or net savings after hardware/electricity. Uncached input and output rates exclude cache discounts, batch pricing, tools, subscriptions, taxes and long-context premiums. Check the linked provider terms before using a comparison for purchasing decisions.
 
-### Eyewall incident atlas
+### Storm Ring incident atlas
 
-Open **Dashboard → Eyewall · AI incidents**, or select the eye-and-brick icon beside Spindle’s star to jump straight to live reports. The shortcut pulses when reports are unread. Opening Live reports marks the current batch as seen in that browser. Rotate the globe or switch to the flat map, then use **Evidence replay** to see which sources were public on a selected date. The bundled cases and basemap are available offline.
+Open **Dashboard → Storm Ring · AI incidents**, or select the Storm Ring icon beside Spindle’s star to open Live reports. When there are unread reports, it pulses and opens the newest one directly. Opening Live reports marks the current batch as seen in that browser. Rotate the globe or switch to the flat map, then use **Evidence replay** to see which sources were public on a selected date. The bundled cases and basemap are available offline.
+
+To practice the click-through, run `node scripts/preview-demo.mjs --storm-ring` and open `http://127.0.0.1:8438`. A fictional report arrives about five seconds after the first check. The demo uses no live feeds, inference, or private workspace data.
 
 **Live reports** collects public publisher headlines and community leads. Every item is marked **Unverified** and links to its source. Refresh manually or enable a 15-minute refresh while Spindle is visible. Source status shows partial outages. The globe uses the documented geography of curated cases.
 
-To add optional topic and relevance labels, load a chat model in **Settings → Models**, then choose **Find Spindle models** under **Sources and local model**. Eyewall prefers an already loaded Tiiny chat model. Configured OpenAI-compatible endpoints on loopback or private IP addresses are also available for explicit selection. A review sends at most twelve public headlines to the selected model. It can run on demand or after refresh when enabled in the current tab. Model labels leave the report’s verification unchanged.
+To add optional topic and relevance labels, choose **Find Spindle models** under **Sources and model routing**. Choose a loaded Tiiny model, an eligible local endpoint, or a configured Cloud endpoint after enabling cloud review. Choose an alternate if the primary is busy or fails its readiness check. A pass sends up to twelve public headlines to one selected model. Storm Ring checks alternate availability before it sends the batch. Generation failures stay with that run. Automatic review is opt-in per tab and can run after a refresh finds new reports while you work in another Spindle workspace. **Find in reports** searches the cache in your browser.
 
 The globe uses [NASA Earth Observatory’s Blue Marble](https://science.nasa.gov/earth/earth-observatory/blue-marble-next-generation/base-topography-bathymetry/) and the flat map uses [Natural Earth land data](https://www.naturalearthdata.com/downloads/110m-physical-vectors/110m-land/).
 
 ## Workspaces
+
+For sequential workflows, the model picker routes text steps to Tiiny, Custom endpoints, or Cloud endpoints. File handoffs, media tasks, and model switching run on Tiiny. If a workflow sends results from one provider to the next, preflight lists the destinations and asks you to confirm. Use short representative runs and the Dashboard's reported tokens and times to compare models. Cloud billing depends on the provider and model.
+
+Open a workflow's **?** for its instructions. Expand workflows as needed. Use **Library & runs** to inspect past outputs or explicitly reopen saved museum and soundtrack runs in their workshops. For Chat, **Restore prompt for another model** starts a fresh draft after a failed run. Review the destination before sending it.
 
 | Workspace | Purpose |
 | --- | --- |

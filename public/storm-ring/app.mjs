@@ -55,7 +55,7 @@ for (const [value, label] of Object.entries(categories)) {
 }
 
 function choose(id, control) {
-  document.dispatchEvent(new Event('eyewall:case-selected'));
+  document.dispatchEvent(new Event('storm-ring:case-selected'));
   stopReplay();
   selection = id;
   render(false);

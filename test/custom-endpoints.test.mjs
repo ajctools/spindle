@@ -134,6 +134,23 @@ test('custom chat isolates endpoints with overlapping models, keeps history, and
   assert.equal(call.body._spindleWebSearch,undefined);
   assert.ok(!seen.some(row=>row.label==='beta'&&row.route.endsWith('/chat/completions')));
 
+  const workflow={name:'Two routes',input:'Workflow input',steps:[
+    {task:'chat',model,endpointId:a.body.id,prompt:'First: {{input}}'},
+    {task:'chat',model,endpointId:b.body.id,prompt:'Second: {{previous.text}}'},
+  ]};
+  assert.equal((await api('/api/workflow/run',workflow)).status,400);
+  const recipe=await api('/api/workflows',workflow);
+  assert.equal(recipe.body.steps[1].endpointId,b.body.id);
+  const routed=await api('/api/workflow/run',{...workflow,confirmEndpoints:true});
+  assert.equal(routed.status,202,JSON.stringify(routed.body));
+  const routedReply=await finished(routed.body.id);
+  assert.equal(routedReply.status,'completed',routedReply.error);
+  assert.deepEqual(routedReply.outputs.map(output=>output.endpointName),['Alpha','Beta']);
+  const workflowCalls=seen.filter(entry=>entry.body).slice(-2);
+  assert.equal(workflowCalls[0].body.messages[0].content,'First: Workflow input');
+  assert.match(workflowCalls[1].body.messages[0].content,/Second: alpha reply/);
+  assert.doesNotMatch(workflowCalls[1].body.messages[0].content,/synthetic-alpha-token/);
+
   await stop();await start();
   assert.equal((await send(a.body)).status,400);
   const betaRun=await send(b.body,{previousChatRunId:reply.id},{_spindleStream:false});

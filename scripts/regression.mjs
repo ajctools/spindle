@@ -87,7 +87,7 @@ async function smokeBrowser(profile){
   const port=await freePort(),origin=`http://127.0.0.1:${port}`;
   const detached=process.platform!=='win32';
   const temp=path.dirname(profile);
-  const demo=spawn(process.execPath,['scripts/preview-demo.mjs'],{...spawnOptions,detached,env:{...process.env,TMPDIR:temp,TMP:temp,TEMP:temp,SPINDLE_DEMO_PORT:String(port)},stdio:'inherit'});
+  const demo=spawn(process.execPath,['scripts/preview-demo.mjs','--storm-ring'],{...spawnOptions,detached,env:{...process.env,TMPDIR:temp,TMP:temp,TEMP:temp,SPINDLE_DEMO_PORT:String(port)},stdio:'inherit'});
   let demoError;
   demo.once('error',error=>{demoError=error;});
   let chrome,ws,closeBrowser;
@@ -370,6 +370,16 @@ async function smokeBrowser(profile){
     await waitFor('a custom endpoint submission',()=>evaluate('window.submittedFixture?.endpointId==="fixture-endpoint"'));
     assert.equal(await evaluate('window.submittedFixture.steps[0].model'),'demo/chat');
 
+    await call('Page.navigate',{url:origin+'/?view=dashboard'});
+    await waitFor('Storm Ring pulse',()=>evaluate(`!!document.querySelector('#storm-ring-pulse.unread')`));
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#storm-ring-pulse')).animationName`),'storm-ring-unread');
+    await click('#storm-ring-pulse');
+    await waitFor('focused simulated report',()=>evaluate(`document.activeElement?.matches('.report-card') && document.activeElement.textContent.includes('Simulation')`));
+    assert.match(await evaluate('location.hash'),/^#live\/[0-9a-f]{24}$/);
+    await call('Page.navigate',{url:origin+'/?view=dashboard'});
+    await waitForElement('#storm-ring-pulse');
+    assert.equal(await evaluate(`document.querySelector('#storm-ring-pulse').getAttribute('href')`),'/storm-ring/#live');
+    console.log('Storm Ring smoke passed: unread pulse, exact report focus, and cleared alert.');
     assert.deepEqual(errors,[],'Browser exceptions');
     console.log('Browser smoke passed: 11 creation modes at 4 viewport sizes, project resume and pause, navigation, device settings, dialogs, cost filters, meeting drafts, Focus, and streaming chat formatting and copy.');
   }finally{

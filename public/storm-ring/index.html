@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Explore the public evidence behind AI incidents over time.">
-  <title>Eyewall · Spindle</title>
+  <title>Storm Ring · Spindle</title>
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./mark.css">
   <script type="module" src="./app.mjs"></script>
@@ -13,7 +13,7 @@
 <body>
   <header class="site-header">
     <div class="shell masthead">
-      <a class="brand" href="./" aria-label="Eyewall home"><span class="brand-mark" aria-hidden="true"><span class="eyewall-mark"><i></i></span></span>EYEWALL</a>
+      <a class="brand" href="./" aria-label="Storm Ring home"><span class="brand-mark" aria-hidden="true"><span class="storm-ring-mark"><i></i></span></span>STORM RING</a>
       <div class="header-actions">
         <a class="dashboard-link" href="/?view=dashboard">Spindle Dashboard</a>
         <button class="button" id="open-leads" type="button">Saved leads <span id="lead-count" hidden></span></button>
@@ -90,10 +90,10 @@
               <h2 id="live-title">Live reports</h2>
               <button type="button" class="button primary" id="refresh-feeds">Refresh feeds</button>
             </div>
-            <p>Public reports and community leads, unverified by Eyewall.</p>
+            <p>Public reports and community leads, unverified by Storm Ring.</p>
             <p id="feed-status" role="status"></p>
             <details class="feed-options">
-              <summary>Sources and local model</summary>
+              <summary>Sources and model routing</summary>
               <label class="feed-toggle"><input id="auto-feed" type="checkbox">Refresh every 15 minutes while Spindle is visible</label>
               <p>Refresh contacts public news and community feeds using fixed queries. Reports are kept in a local cache.</p>
               <ul id="source-health" aria-label="Feed status"></ul>
@@ -102,9 +102,13 @@
                 <label class="sr-only" for="triage-model">Spindle model</label>
                 <select id="triage-model" disabled><option value="">Select a model</option></select>
               </div>
+              <label class="feed-toggle"><input id="allow-cloud" type="checkbox">Allow a selected Cloud endpoint to receive public headlines</label>
+              <label class="feed-toggle">Alternate if primary is unavailable
+                <select id="triage-fallback" disabled><option value="">No alternate</option></select>
+              </label>
               <label class="feed-toggle"><input id="auto-triage" type="checkbox" disabled>Run selected model after refresh</label>
               <button type="button" class="button" id="triage-reports" disabled>Triage current headlines</button>
-              <p id="model-status" role="status">Optional. Review public headlines with a loaded Tiiny chat model or a configured local endpoint.</p>
+              <p id="model-status" role="status">An alternate is checked before sending headlines. A failed generation is not sent again automatically.</p>
             </details>
             <label class="live-filter">Show
               <select id="report-type">
@@ -112,6 +116,9 @@
                 <option value="news">News reports</option>
                 <option value="community">Community leads</option>
               </select>
+            </label>
+            <label class="live-filter">Find in reports
+              <input id="report-query" type="search" maxlength="160" placeholder="Topic or source" autocomplete="off">
             </label>
           </header>
           <div class="live-scroll" id="live-scroll" tabindex="0" aria-label="Unverified reports">
@@ -144,7 +151,7 @@
 
     <footer class="site-footer">
       <span>Locations are approximate. Cases with unknown impact areas appear in the register.</span>
-      <a href="/?guide=eyewall">Eyewall field guide</a>
+      <a href="/?guide=storm-ring">Storm Ring field guide</a>
     </footer>
   </main>
 

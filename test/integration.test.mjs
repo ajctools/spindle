@@ -7,23 +7,26 @@ import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {setTimeout as pause} from 'node:timers/promises';
 import {voiceReferenceSample} from '../public/guidance.mjs';
-import {unreadReports,seeReports,autoRefreshEnabled,setAutoRefresh,refreshIsDue,refreshInterval} from '../public/eyewall/read-state.mjs';
+import {unreadReports,newestUnreadReport,reportFragment,seeReports,autoRefreshEnabled,setAutoRefresh,refreshIsDue,refreshInterval} from '../public/storm-ring/read-state.mjs';
 
-test('Eyewall tracks unread headlines independently of the opt-in refresh',t=>{
+test('Storm Ring tracks unread headlines independently of the opt-in refresh',t=>{
   const storage=new Map();
   const previous=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
   Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{
     getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),
   }});
   t.after(()=>previous?Object.defineProperty(globalThis,'localStorage',previous):delete globalThis.localStorage);
-  const a={firstSeenAt:'2026-11-19T12:00:00Z'},b={firstSeenAt:'2026-11-19T12:15:00Z'};
+  const a={id:'aaaaaaaaaaaaaaaaaaaaaaaa',firstSeenAt:'2026-11-19T12:00:00Z'};
+  const b={id:'bbbbbbbbbbbbbbbbbbbbbbbb',firstSeenAt:'2026-11-19T12:15:00Z'};
   assert.equal(autoRefreshEnabled(),false);
   assert.equal(unreadReports([a]),1);
+  assert.equal(reportFragment(newestUnreadReport([a,b]).id),'#live/bbbbbbbbbbbbbbbbbbbbbbbb');
   seeReports([a]);
   assert.equal(unreadReports([a,b]),1);
   seeReports([a,b]);
   seeReports([a]);
   assert.equal(unreadReports([a,b]),0);
+  assert.equal(reportFragment(newestUnreadReport([a,b])?.id),'#live');
   setAutoRefresh(true);
   assert.equal(autoRefreshEnabled(),true);
   assert.equal(refreshIsDue({lastAttempt:a.firstSeenAt},Date.parse(a.firstSeenAt)+refreshInterval-1),false);
@@ -202,7 +205,7 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
       }
       if(url.pathname==='/news/technology/rss.xml'){
         assert.equal(options.headers,undefined);
-        return new Response('<rss><channel><item><title>Fixture AI chatbot data breach</title><link>https://example.org/eyewall-fixture</link><pubDate>'+new Date(Date.now()-60000).toUTCString()+'</pubDate></item></channel></rss>');
+        return new Response('<rss><channel><item><title>Fixture AI chatbot data breach</title><link>https://example.org/storm-ring-fixture</link><pubDate>'+new Date(Date.now()-60000).toUTCString()+'</pubDate></item></channel></rss>');
       }
       if(options?.redirect==='error'&&options.headers===undefined)return new Response('',{status:503});
       if(['https://feeds.bbci.co.uk','https://www.cbsnews.com'].includes(url.origin)){
@@ -261,23 +264,28 @@ test('local bridge inventories, protects writes, hands workflow outputs across m
     assert.equal((await fetch(base+'/api/run',{method:'POST',body:'{}'})).status,403);
     assert.equal((await fetch(base+'/api/run',{method:'POST',headers:{cookie,origin:'https://example.com'},body:'{}'})).status,403);
     const post=async(p,b)=>(await fetch(base+p,{method:'POST',headers:{cookie,'content-type':'application/json'},body:JSON.stringify(b)})).json();
-    const atlas=await fetch(base+'/eyewall/');
+    const atlas=await fetch(base+'/storm-ring/');
+    const legacyAtlas=await fetch(base+'/eyewall/?from=bookmark',{redirect:'manual'});
+    assert.equal(legacyAtlas.status,302);
+    assert.equal(legacyAtlas.headers.get('location'),'/storm-ring/?from=bookmark');
     assert.match(await atlas.text(),/Spindle Dashboard/);
     assert.match(atlas.headers.get('set-cookie'),/HttpOnly/);
-    assert.equal((await fetch(base+'/eyewall/earth.jpg')).headers.get('content-type'),'image/jpeg');
+    assert.equal((await fetch(base+'/storm-ring/earth.jpg')).headers.get('content-type'),'image/jpeg');
+    assert.equal((await fetch(base+'/api/storm-ring/reports')).status,403);
     assert.equal((await fetch(base+'/api/eyewall/reports')).status,403);
-    const feed=await post('/api/eyewall/refresh',{});
+    const feed=await post('/api/storm-ring/refresh',{});
     assert.equal(feed.reports.length,1);
-    assert.equal(feed.reports[0].url,'https://example.org/eyewall-fixture');
+    assert.equal(feed.reports[0].url,'https://example.org/storm-ring-fixture');
+    assert.equal((await (await get('/api/eyewall/reports')).json()).reports[0].id,feed.reports[0].id);
     assert.equal(feed.sources.filter(source=>source.state==='ok').length,1);
-    const [eyewallModel]=await (await get('/api/eyewall/models')).json();
-    assert.deepEqual(eyewallModel,{model:'test/chat',name:'Chat',provider:'Tiiny',preferred:false});
-    const triaged=await post('/api/eyewall/triage',{model:'test/chat'});
+    const [stormRingModel]=await (await get('/api/storm-ring/models')).json();
+    assert.deepEqual(stormRingModel,{model:'test/chat',name:'Chat',provider:'Tiiny',preferred:false});
+    const triaged=await post('/api/storm-ring/triage',{model:'test/chat'});
     assert.equal(triaged.labeled,1);
     assert.deepEqual(triaged.reports[0].triage,{model:'test/chat',provider:'Tiiny',topic:'Security',relevance:'Needs review'});
     const localEndpoint=await post('/api/endpoints',{name:'Fixture local model',url:'http://127.0.0.1:'+device.address().port+'/v1',key:'fixture-key'});
-    assert.ok((await (await get('/api/eyewall/models')).json()).some(model=>model.endpointId===localEndpoint.id));
-    const reviewedLocally=await post('/api/eyewall/triage',{model:'test/chat',endpointId:localEndpoint.id});
+    assert.ok((await (await get('/api/storm-ring/models')).json()).some(model=>model.endpointId===localEndpoint.id));
+    const reviewedLocally=await post('/api/storm-ring/triage',{model:'unloaded-fixture',fallback:{model:'test/chat',endpointId:localEndpoint.id}});
     assert.equal(reviewedLocally.labeled,1);
     assert.equal(reviewedLocally.reports[0].triage.provider,'Fixture local model');
     assert.equal(reviewedLocally.reports[0].reviewTarget,undefined);

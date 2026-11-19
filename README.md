@@ -2,7 +2,7 @@
 
 # Spindle
 
-Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, turn recordings into reviewed meeting minutes, create images and audio, and connect model steps into repeatable workflows. The dashboard tracks runs and device performance, and Eyewall follows public AI incident reporting.
+Spindle is a local browser workbench for Tiiny AI. Chat with downloaded models, turn recordings into reviewed meeting minutes, create images and audio, and connect model steps into repeatable workflows. The dashboard tracks runs and device performance, and Storm Ring follows public AI incident reporting.
 
 **[Latest release](https://github.com/ajctools/spindle/releases/latest) · [Current source](https://github.com/ajctools/spindle/tree/main) · MIT license · Node.js 22+ · No Tiiny SDK required**
 
@@ -64,7 +64,7 @@ You need a reachable Tiiny device and its API key. The CLI and SDK are optional.
 | PromptDex & Search Spindle | Prepare reusable prompts, compare two models, and find saved work across the app |
 | Workflows | Make a film, review retakes, repair a soundtrack, build an offline gallery or booklet, or save a sequential recipe |
 | Dashboard | Sort performance tables and see weekly token usage by app and model across the Tiiny |
-| Eyewall | Browse a globe of curated AI incidents, replay public evidence, and review unverified news and community leads |
+| Storm Ring | Browse a globe of curated AI incidents, replay public evidence, and review unverified news and community leads |
 | Library & runs | Reopen saved inputs and outputs, download text attachments, and copy prompts and replies |
 | Settings | Manage Tiiny, custom, and cloud endpoints, browse Tiiny models, and view privacy settings |
 
@@ -119,13 +119,17 @@ Chat streams the response and separates returned reasoning into a collapsed **Th
 
 **Settings → Security & Privacy** can capture where Spindle sent Tiiny chat and search requests, along with transport and response metadata. The Chat composer previews destinations and offers **Send to Tiiny only** for a single message on a Tiiny model.
 
-## Eyewall and project memory
+## Storm Ring, model routing, and project memory
 
-Open **Eyewall** from the Dashboard or the eye-and-brick icon beside the Spindle star. The icon pulses for unread reports. **Live reports** links to public publisher headlines and community leads, each marked **Unverified**. Refresh manually or opt into a 15-minute refresh while Spindle is visible. Optional headline review uses a loaded Tiiny chat model or a configured local endpoint for topic and relevance suggestions. **Evidence replay** shows what was public at the selected date.
+Open **Storm Ring** from the Dashboard or the segmented eye beside the Spindle star. It pulses for unread reports and opens the newest one when clicked. **Live reports** links to public publisher headlines and community leads, each marked **Unverified**. Refresh manually or opt into a 15-minute refresh while Spindle is visible. Optional headline review uses a loaded Tiiny chat model, a configured local endpoint, or a cloud endpoint you explicitly enable. Choose an alternate for when the primary is busy or unavailable. **Evidence replay** shows what was public at the selected date.
+
+Try the pulse with a fictional report. Run `node scripts/preview-demo.mjs --storm-ring`, open `http://127.0.0.1:8438`, and wait about five seconds. The read-only demo uses temporary synthetic data.
+
+In **Workflows**, choose a destination for each text step and confirm any endpoint handoff before running. The **?** beside each workflow opens its guide. Reopen earlier results from **Library & runs**.
 
 **Project memory** lets you save a useful reply as a checkpoint for a later Tiiny chat. Choose its brief or full result, pause recall, or export the project. Checkpoints and cached embeddings live in the helper’s private data directory. For optional remote chat, set up **Cloud endpoints** and select its model in Chat. The notice beside Send identifies the destination and what will be sent.
 
-See [usage and configuration](docs/USAGE.md) for Eyewall, project memory, Focus mode, and the optional [Tiiny USB travel relay](docs/USAGE.md#taking-tiiny-away-from-the-spindle-host).
+See [usage and configuration](docs/USAGE.md) for Storm Ring, project memory, Focus mode, and the optional [Tiiny USB travel relay](docs/USAGE.md#taking-tiiny-away-from-the-spindle-host).
 
 ## A dashboard with context
 

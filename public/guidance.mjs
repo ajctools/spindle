@@ -43,6 +43,7 @@ guides.music.examples.push(
 guides.chat.tips.unshift('Use PromptDex for reusable prompts or a side-by-side model comparison. Use Attach from Vault to select an excerpt from your Tiiny when supported.');
 guides.chat.tips.push('Watch the run strip for elapsed time, context used, output speed, and prompt-cache hits. An approximation marker means the runtime has yet to provide an exact count.');
 guides.chat.tips.push('Use Focus to give the active chat more room. Save a useful reply as a project checkpoint or pause project recall for the next turn. Use a custom or cloud model by explicitly choosing it in the Chat model picker.');
+guides.chat.tips.push('If a reply fails, restore its prompt in a fresh chat, choose a model, and review where it will be sent. Attachments and earlier turns are separate.');
 guides.asr.tips.push('Use Meeting Desk when you want to record, follow timestamped transcript lines, or draft and review meeting minutes.');
 export const essentials=[
   {title:'Available, downloaded, loaded',text:'Available means a model is listed in the store. Downloaded means its files are on the device. Loaded means it occupies runtime capacity and is ready for requests. Download a model once, then load it when needed.'},
@@ -56,6 +57,8 @@ export const essentials=[
   {title:'Where your work goes',text:'Spindle saves prompts, run records, and outputs in its local data folder. The selected model’s endpoint receives your chat inputs. Settings manages Tiiny, Custom endpoints, and Cloud endpoints.'}
 ];
 export const workflowTips=[
+  {title:'Route each text step',text:'Pick a Tiiny, Custom, or Cloud chat model for each text step. Review the destinations before confirming. A previous step’s text can travel to the next endpoint. Media and file handoffs use Tiiny.'},
+  {title:'Compare the work and cost',text:'Use a short representative input and compare result quality, reported tokens, and elapsed time in Dashboard. For cloud text steps, add a response limit in advanced parameters if you have a budget. The provider determines its price and bills actual usage.'},
   {title:'Choose a guided workflow',text:'Use Idea → image → film to animate a saved image. Repair soundtrack to replace dialogue. Use Recording → rough cut to review retakes, or Facsimile Book to turn reviewed scans and translations into an offline booklet.'},
   {title:'Build or resume a museum',text:'The TiinyVerse museum can pack public posts into an offline gallery. Choose the template preview for a quick build. The authored option uses downloaded models and saves completed stages so you can resume a longer build.'},
   {title:'Start with the result',text:'Choose a recipe close to your goal. Run the individual steps on small inputs first, then connect them. Save the recipe once its instructions and model choices work for you.'},
@@ -65,6 +68,30 @@ export const workflowTips=[
   {title:'Capacity is about what stays loaded',text:'The sum shown in preflight estimates the capacity needed if all selected models stay resident together. Enable model switching to run one at a time when they do not fit together. Use switching while the device is idle.'},
   {title:'Keep the contract between steps clear',text:'Check what each step produces and what the next step expects. Speech produces audio; transcription expects audio. OCR produces text; chat can use that text. Current workflows are sequential and do not automatically branch or execute tool calls.'}
 ];
+export const workflowHelp={
+  film:{title:'Idea → image → film',items:[
+    {title:'Create or reuse an image',text:'Describe a scene, attach an image for editing, or open a saved image from Library & runs. Select the corresponding chat enhancer and image model under Workflow options.'},
+    {title:'Animate the exact image',text:'Review the still, then enter motion direction and length. Use a short clip first. Longer clips are stitched locally with FFmpeg and each segment starts from the previous segment’s last frame.'},
+    {title:'Recover a run',text:'Open Library & runs for the original image, saved segments, and final video. Resume a failed film to reuse completed segments.'},
+  ]},
+  cut:{title:'Recording → rough cut',items:[
+    {title:'Analyze the recording',text:'Choose a short recording and compatible transcription and classification models. Results are suggested retakes and source timecodes for review.'},
+    {title:'Approve the edit',text:'Listen to the candidates and choose which cuts to apply. Export a separate media file with FFmpeg or download the cut sheet. The original recording is retained.'},
+  ]},
+  soundtrack:{title:'Video → repair soundtrack',items:[
+    {title:'Review the words',text:'Choose a saved video. Transcribe the original audio if it helps, then write or edit the words that the new voice should say.'},
+    {title:'Mix a separate track',text:'Choose a speech model, then set the voice start and original audio level. Add optional background music. FFmpeg saves a separate copy with the new mix.'},
+  ]},
+  museum:{title:'TiinyVerse → a walkable 3D museum',items:[
+    {title:'Choose the exhibits',text:'Import the public UseCase posts, review the sources, and pick the exhibits. Use Quick museum for a fast offline gallery or choose downloaded models for a Tiiny-authored app.'},
+    {title:'Pick a workload',text:'Enable art, materials, narration, or a hero object as needed. The authored app is built and checked in stages. Its HTML, media, and author evidence are saved in Library & runs.'},
+    {title:'Return to a saved build',text:'Open a museum run from the Library to inspect or resume it, repack its saved media, or ask Tiiny to refine the app.'},
+  ]},
+  facsimile:{title:'Facsimile Book',items:[
+    {title:'Prepare and review pages',text:'Add scans or choose the included sample. Review transcriptions and translations against each page and add optional narration.'},
+    {title:'Export the final book',text:'Save the reviewed pages as a self-contained HTML booklet for offline reading. Check the content and narration before sharing it.'},
+  ]},
+};
 export const workspaceTips={
   meeting:{
     title:'Meeting Desk',
@@ -80,16 +107,17 @@ export const workspaceTips={
       {title:'Filter the measurements',text:'Choose a date range, connection, model, or task. Expand a record to see its usage source, timing, cache counts, and generation settings. A dash means the runtime did not supply the measurement.'},
       {title:'Compare like for like',text:'Run a fixed text benchmark with a loaded Chat model. Use the same prompt and settings for comparisons. Runtime decode speed and total execution time measure different parts of the run.'},
       {title:'Read the device and cost views',text:'Live hardware measures NPU, CPU, and RAM activity. Tiiny’s weekly ledger covers device-wide usage. Cloud estimates apply editable rates to qualifying Spindle text runs locally.'},
-      {title:'Open Eyewall',text:'The Dashboard links to the incident atlas. The eye-and-brick shortcut beside the Spindle star opens Live reports directly.'},
+      {title:'Open Storm Ring',text:'The Dashboard links to the incident atlas. The segmented eye beside the Spindle star opens Live reports or takes you to the newest unread report.'},
     ],
   },
-  eyewall:{
-    title:'Eyewall',
+  'storm-ring':{
+    title:'Storm Ring',
     items:[
-      {title:'See new reports',text:'The eye-and-brick shortcut pulses when the current browser has unread reports. Opening Live reports marks the current batch as seen. Refresh manually or enable a 15-minute refresh while Spindle is visible.'},
-      {title:'Read the sourcing',text:'News headlines and community leads are marked Unverified. Open the linked source to check its claims. Sources and local model shows which feeds were reachable. Saved leads stores your public links in this browser.'},
+      {title:'See new reports',text:'The segmented eye beside the Spindle star pulses when there are unread reports. Click it to open the newest unread report. Opening Live reports marks the current batch as seen. Refresh manually or enable a 15-minute refresh while Spindle is visible.'},
+      {title:'Read the sourcing',text:'News headlines and community leads are marked Unverified. Open the linked source to check its claims. If the report could affect a decision, check a current notice from the organization, operator, or local authority. Sources and model routing shows which feeds were reachable. Saved leads stores your public links in this browser.'},
       {title:'Use the atlas and replay',text:'Rotate the globe or switch to Flat map. Select a mapped case or search the register, then choose an evidence date to see what was public at that point. Map markers use documented impact areas. Cases with unknown locations remain in the register.'},
-      {title:'Ask a local model for labels',text:'Load a chat model on Tiiny, then use Find Spindle models. Eligible local Custom endpoints are also available. Review sends up to twelve public headlines and adds topic and relevance suggestions. Reports remain unverified.'},
+      {title:'Choose where headlines are reviewed',text:'Use Find Spindle models to choose a loaded Tiiny model or an eligible local Custom endpoint. Optionally choose an alternate for a busy or unavailable primary. Cloud models require a separate opt-in. A review sends up to twelve public headlines and adds topic and relevance suggestions. Reports remain unverified.'},
+      {title:'Collect reports while you work',text:'Feed refresh collects public headlines from fixed sources while Spindle is visible when enabled. Use Find in reports to filter the cache without sending your research topic. If you also enable automatic model review, Spindle can use the selected route in this tab after finding new reports.'},
     ],
   },
   endpoints:{

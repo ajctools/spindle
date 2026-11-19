@@ -13,8 +13,8 @@ export const RELEASE_FILES=[
   'fixtures/document.png','fixtures/speech.wav','fixtures/star.png','fixtures/voice-reference.wav',
   'public/artifact-download.mjs','public/meeting-packet.mjs','public/facsimile-book.mjs','test/artifact-handoffs.test.mjs',
   'public/focus.css','custom-endpoints.mjs','test/custom-endpoints.test.mjs','scripts/tiiny-usb-relay.mjs','test/tiiny-relay.test.mjs',
-  'eyewall.mjs','public/eyewall/index.html','public/eyewall/app.mjs','public/eyewall/live.mjs','public/eyewall/read-state.mjs','public/eyewall/style.css','public/eyewall/incidents.mjs','public/eyewall/globe.mjs','public/eyewall/earth.jpg','public/eyewall/world.geojson',
-  'public/eyewall/mark.css',
+  'storm-ring.mjs','public/storm-ring/index.html','public/storm-ring/app.mjs','public/storm-ring/live.mjs','public/storm-ring/read-state.mjs','public/storm-ring/style.css','public/storm-ring/incidents.mjs','public/storm-ring/globe.mjs','public/storm-ring/earth.jpg','public/storm-ring/world.geojson',
+  'public/storm-ring/mark.css',
   'test/adapters.test.mjs','test/chat.test.mjs','test/project-memory.test.mjs','test/search.test.mjs','test/audio.test.mjs','test/connection.test.mjs','test/guidance.test.mjs','test/integration.test.mjs','test/metrics.test.mjs','test/security.test.mjs','test/release.test.mjs','test/creative.test.mjs','test/workshops.test.mjs','test/museum.test.mjs','test/museum-media.test.mjs','test/museum-recovery.test.mjs','test/music.test.mjs','test/cloud-cost.test.mjs','test/preview.test.mjs','test/museum-author.test.mjs','test/author-route.test.mjs','test/rough-cut.test.mjs','test/meeting.test.mjs','test/global-search.test.mjs',
 ];
 const patterns=[

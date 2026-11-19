@@ -42,11 +42,11 @@ A standalone request to read a supplied HTTPS URL can fetch that page directly. 
 
 Search is on by default and the on/off choice is remembered in this browser. The external-query notice remains visible beside Send even when Chat options is collapsed. In standalone Chat, Spindle can extract a query from a short lookup, or Tiiny can draft one from the current prompt. An explicit query overrides both. Only the resulting query goes to DuckDuckGo or Brave Search over HTTPS. Workflow search can use an eligible step prompt directly. No conversation history, attachments, or Tiiny key are sent to the search provider. Workflow steps that insert shared input or a prior result require an explicit search query. Queries/results are saved in local run history. Brave credentials are separate, kept in helper memory only, never returned to the UI or written to runs/workflows. Forget the key or restart the helper to clear it. Search results are untrusted text, rendered escaped and supplied as evidence with instructions to disregard embedded commands. Models can still be misled by source content; review claims and citations. Searches planned by Tiiny may read bounded page excerpts under the restrictions above.
 
-### Eyewall feeds and model review
+### Storm Ring feeds and model review
 
-Eyewall reads a bounded local cache in `data/eyewall-reports.json`. Refresh sends fixed HTTPS requests to public feed and discovery providers. Reports are treated as untrusted text, and opening a source link is a separate browser navigation. Feed requests carry no saved leads, private workspace content, or device credentials.
+Storm Ring reads a bounded local cache in `data/eyewall-reports.json`. The existing filename keeps the cache available across the rename. Refresh sends fixed HTTPS requests to public feed and discovery providers. Reports are treated as untrusted text, and opening a source link is a separate browser navigation. Feed requests carry no saved leads, private workspace content, or device credentials.
 
-An optional headline review uses the selected loaded Tiiny chat model or configured local OpenAI-compatible endpoint. Only public headlines and their batch indexes are sent as input. Inference uses the selected endpoint's normal authentication and transport. The helper accepts only recognized topic and relevance labels and never turns model output into search requests or verification.
+An optional headline review uses the selected loaded Tiiny chat model, eligible local endpoint, or explicitly enabled Cloud endpoint. Only public headlines and their batch indexes are sent as input. Endpoint readiness checks occur before the headline batch is sent. Inference uses the chosen endpoint’s normal authentication and transport, and failed generation requests are not resent to an alternate. Storm Ring does not use chat drafts, saved leads, or research filter text for model review. The helper accepts only recognized topic and relevance labels. It never turns model output into search requests or verification.
 
 ## Local search, attachments, and exports
 
@@ -56,7 +56,7 @@ An optional headline review uses the selected loaded Tiiny chat model or configu
 
 Uploaded text and long-paste attachments are sent to the selected chat endpoint as conversation context and saved in local run history. For Tiiny chats, web search pauses on a turn with text attachments unless you provide a separate query.
 
-Custom and cloud endpoints receive the current prompt, prior turns, and attached text for chats using their models. Cloud endpoint profiles require HTTPS and are selected explicitly in Chat. Spindle sends only that endpoint’s key, if supplied. A remembered key is stored in plaintext in the private data folder. An unremembered key stays in server memory. These chat endpoints do not use Spindle’s web search, Vault, or project recall. Eyewall model review is limited to Tiiny and eligible local custom endpoints.
+Custom and cloud endpoints receive the current prompt, prior turns, and attached text for chats using their models. Explicitly routed text steps can also receive workflow inputs and preceding step text following confirmation. Cloud endpoint profiles require HTTPS. Spindle sends only that endpoint’s key, if supplied. A remembered key is stored in plaintext in the private data folder. An unremembered key stays in server memory. These endpoints do not use Spindle’s chat web search, Vault, or project recall.
 
 Chat recovery stores the last accepted run ID in the browser. The authenticated helper supplies the saved turns and attachments when you return. **New chat** clears the remembered run ID. Previous runs remain in the local library.
 

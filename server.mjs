@@ -39,7 +39,7 @@ import {chatAttachmentText,validateTextAttachments} from './public/chat-attachme
 import {compareValues} from './public/dashboard-table.mjs';
 import {extractSoundtrack,replaceSoundtrack,soundOptions} from './soundtrack.mjs';
 import {analyzeRecording,renderCut,sourceAssetPattern,sourceMime} from './rough-cut.mjs';
-import {createEyewall,isLocalEyewallEndpoint} from './eyewall.mjs';
+import {createStormRing,isLocalStormRingEndpoint} from './storm-ring.mjs';
 
 const ROOT=path.dirname(fileURLToPath(import.meta.url)), DATA=process.env.SPINDLE_DATA_DIR || path.join(ROOT,'data');
 const {version}=JSON.parse(await fs.readFile(path.join(ROOT,'package.json'),'utf8'));
@@ -59,6 +59,8 @@ const controllers=new Map();
 const modelLoads=new WeakMap();
 const chatProgress=new WeakMap();
 const endpointRuns=new WeakMap();
+const workflowEndpointRuns=new WeakMap();
+const stormRingEndpointRuns=new Map();
 const vaultReferences=new WeakMap();
 const meshPreviews=new Map();
 let sessionConnection=null;
@@ -73,8 +75,23 @@ async function writeJSON(file,value){return writeJSONText(file,JSON.stringify(va
 async function writeJSONText(file,text){const f=path.join(DATA,file);await fs.writeFile(f+'.tmp',text,{mode:0o600});if(process.platform!=='win32')await fs.chmod(f+'.tmp',0o600);for(let attempt=0;;attempt++){try{await fs.rename(f+'.tmp',f);return;}catch(e){if(process.platform!=='win32'||!['EPERM','EBUSY','EACCES'].includes(e.code)||attempt>=19)throw e;await sleep(Math.min(500,50*(attempt+1)));}}}
 const projectMemory=createProjectMemory({directory:DATA,readJSON,writeJSON});
 const customEndpoints=await createCustomEndpoints({readJSON,writeJSON});
-const eyewall=await createEyewall({readJSON,writeJSON});
-const eyewallAssets=new Map([
+const stormRing=await createStormRing({readJSON,writeJSON});
+const simulateStormRing=process.env.SPINDLE_DEMO==='1'&&process.env.SPINDLE_DEMO_STORM_RING==='1';
+let demoReportAt;
+function demoStormRingState(){
+  demoReportAt??=Date.now()+5000;
+  const arrived=Date.now()>=demoReportAt, time=new Date(demoReportAt).toISOString();
+  return {
+    simulation:true, readOnly:true, busy:!arrived, triaging:false,
+    lastAttempt:arrived?time:null, lastSuccess:arrived?time:null,
+    sources:[{name:'Fictional demo feed',state:arrived?'ok':'waiting',count:arrived?1:0}],
+    reports:arrived?[{
+      id:'000000000000000000000001',title:'AI transit assistant sends riders to a closed station',
+      publisher:'Fictional demo feed',community:true,reportedAt:time,firstSeenAt:time,simulated:true,
+    }]:[],
+  };
+}
+const stormRingAssets=new Map([
   ['index.html','text/html; charset=utf-8'],['app.mjs','text/javascript'],['live.mjs','text/javascript'],
   ['globe.mjs','text/javascript'],['incidents.mjs','text/javascript'],['read-state.mjs','text/javascript'],['style.css','text/css'],
   ['mark.css','text/css'],
@@ -732,9 +749,10 @@ async function imageSource(url,file){
   if(!((png&&mime==='image/png')||(jpg&&mime==='image/jpeg')||(webp&&mime==='image/webp')))throw new Error('Use a PNG, JPEG, or WebP reference image.');
   return file;
 }
-async function enqueueRun(b,vaultReference,endpoint){
+async function enqueueRun(b,vaultReference,endpoint,stepEndpoints){
   if(deviceControl)throw Error('Wait for the device action to finish before starting a run.');
-  const j={id:randomUUID(),name:b.name || tasks[b.steps[0].task].label,status:'queued',createdAt:new Date().toISOString(),input:b.input || '',file:b.file,steps:b.steps,outputs:b.outputs || [],currentStep:0,switchModels:b.switchModels===true,checkTask:b.checkTask,benchmark:!!b.benchmark,connectionId:endpoint?'endpoint:'+endpoint.id:connectionHash(await config()),...(endpoint?{endpointId:endpoint.id,endpointName:endpoint.name}:{}),...(b.studio?{studio:b.studio}:{}),...(b.film?{film:b.film}:{}),...(b.museum?{museum:b.museum}:{}),...(b.soundtrack?{soundtrack:b.soundtrack}:{})};
+  const externalOnly=stepEndpoints?.every(Boolean);
+  const j={id:randomUUID(),name:b.name || tasks[b.steps[0].task].label,status:'queued',createdAt:new Date().toISOString(),input:b.input || '',file:b.file,steps:b.steps,outputs:b.outputs || [],currentStep:0,switchModels:b.switchModels===true&&!externalOnly,checkTask:b.checkTask,benchmark:!!b.benchmark,connectionId:endpoint?'endpoint:'+endpoint.id:externalOnly?'workflow-endpoints':connectionHash(await config()),...(endpoint?{endpointId:endpoint.id,endpointName:endpoint.name}:{}),...(b.studio?{studio:b.studio}:{}),...(b.film?{film:b.film}:{}),...(b.museum?{museum:b.museum}:{}),...(b.soundtrack?{soundtrack:b.soundtrack}:{})};
   if(vaultReference&&vaultReference.connectionId!==j.connectionId)throw new Error('The Tiiny connection changed. Select the Vault excerpt again.');
   if(deviceControl)throw Error('Wait for the device action to finish before starting a run.');
   if(b.roughCut)j.roughCut=b.roughCut;
@@ -761,6 +779,7 @@ async function enqueueRun(b,vaultReference,endpoint){
   if(b.meetingSummaryOf&&b.meetingPacket===true)j.meetingPacket=true;
   if(vaultReference)vaultReferences.set(j,vaultReference);
   if(endpoint)endpointRuns.set(j,endpoint);
+  if(stepEndpoints)workflowEndpointRuns.set(j,stepEndpoints);
   jobs.unshift(j);
   const pending=jobs.filter(x=>x.status==='queued').sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
   jobs=[...jobs.filter(x=>x.status!=='queued'),...pending];await saveJobs();return j;
@@ -826,7 +845,7 @@ async function authorInference(job,kind,prompt,modelId,shot,signal){
 async function executeEndpointChat(step,signal,job,endpoint){
   const content=chatAttachmentText(step.prompt,step.attachments || []);
   const model=step.model;
-  const body={...chatSettings({_spindleResponseMode:'model',...step.params}),model,messages:[...step.messages,{role:'user',content}]};
+  const body={...chatSettings({_spindleResponseMode:'model',...step.params}),model,messages:[...(step.messages??[]),{role:'user',content}]};
   const hideKey=value=>redactSecrets(value,[endpoint.key]);
   const started=performance.now();
   try{
@@ -849,10 +868,13 @@ async function executeEndpointChat(step,signal,job,endpoint){
 async function startQueue(){
   if(active)return;active=true;
   try{await chatPreload?.catch(()=>{});await previewInference?.catch(()=>{});for(let job; (job=jobs.find(j=>j.status==='queued'));){
-    const controller=new AbortController(),endpoint=endpointRuns.get(job);let finalStatus='completed';controllers.set(job.id,controller);job.status='running';job.startedAt=new Date().toISOString();await saveJobs();
+    const controller=new AbortController(),standaloneEndpoint=endpointRuns.get(job),stepEndpoints=workflowEndpointRuns.get(job);
+    await previewInference?.catch(()=>{});
+    if(job.status!=='queued')continue;
+    let finalStatus='completed';controllers.set(job.id,controller);job.status='running';job.startedAt=new Date().toISOString();await saveJobs();
     try{
     if(job.meshTextureOf&&job.connectionId!==connectionHash(await config()))throw Error('Reconnect the original Tiiny before applying texture.');
-    if(!endpoint&&!job.museum&&!job.meeting)await rememberLoadedModels(job);
+    if(!standaloneEndpoint&&!stepEndpoints?.every(Boolean)&&!job.museum&&!job.meeting)await rememberLoadedModels(job);
     if(job.roughCut){
       const [asr,decision]=job.steps,signal=controller.signal;
       const phase=async label=>{job.phase=label;await saveJobs();};
@@ -899,6 +921,7 @@ async function startQueue(){
     }
     const resumable=!!(job.film||job.museum||job.soundtrack?.kind==='replace');
     let previous=resumable?job.outputs.at(-1):null;for(let i=resumable?job.outputs.length:0;!job.roughCut&&i<job.steps.length&&!job.steps[i].authorKind;i++){
+      const endpoint=standaloneEndpoint??stepEndpoints?.[i];
       controller.signal.throwIfAborted();chatProgress.delete(job);job.currentStep=i;await saveJobs();
       const s=job.steps[i];let file=s.file || (s.fileFrom==='input'?job.file:null);
       if(job.meeting){
@@ -926,7 +949,7 @@ async function startQueue(){
       const literalChat=s.task==='chat'&&s.promptMode==='literal';
       const step={...s,file,prompt:literalChat?prompt:expandPrompt(prompt,job.input,previous),usesWorkflowData:!literalChat&&(!prompt||/\{\{(?:input|previous\.text)\}\}/.test(prompt)),...(job.museum?.retainedShape&&s.task==='mesh'&&job.museum.retainedShape.model===s.model?{retainedNative:job.museum.retainedShape}:{})};
       const prepStarted=performance.now();
-      if(job.switchModels){job.phase='Preparing '+(cached.models.find(m=>m.id===s.model)?.name || s.model);await saveJobs();await rememberLoadedModels(job);await switchTo(s.model,job);}
+      if(job.switchModels&&!endpoint){job.phase='Preparing '+(cached.models.find(m=>m.id===s.model)?.name || s.model);await saveJobs();await rememberLoadedModels(job);await switchTo(s.model,job);}
       if(s.task==='music'){
         try{step.musicRuntime=await musicInfoReady(s.model,controller.signal,job);}
         catch(error){job.audioFailure='music-runtime';throw error;}
@@ -934,17 +957,20 @@ async function startQueue(){
       const prepareMs=performance.now()-prepStarted,startedAt=new Date().toISOString(),started=performance.now(),samples=[];
       let sampling=false;const sample=async()=>{if(sampling)return;sampling=true;try{samples.push(cleanNpu(await remoteJSON('/api/v1/npu/status',{timeout:4000})));}catch{}finally{sampling=false;}};
       const sampler=endpoint?null:setInterval(()=>void sample(),2000);if(sampler){void sample();sampler.unref();}
-      job.progress=null;job.phase=endpoint?'Waiting for custom endpoint':job.meshTextureOf?(i?'Exporting textured GLB':'Applying texture to the saved shape'):job.film?'Generating segment '+(i+1)+' of '+job.steps.length:job.museum?museumStepLabel(s,job.museum):'Running '+tasks[s.task].label.toLowerCase();if(job.film)job.film.stage='generating';await saveJobs();
+      const measurementConnection=endpoint?'endpoint:'+endpoint.id:job.connectionId;
+      job.progress=null;job.phase=endpoint?'Waiting for '+endpoint.name:job.meshTextureOf?(i?'Exporting textured GLB':'Applying texture to the saved shape'):job.film?'Generating segment '+(i+1)+' of '+job.steps.length:job.museum?museumStepLabel(s,job.museum):'Running '+tasks[s.task].label.toLowerCase();if(job.film)job.film.stage='generating';await saveJobs();
       try{
+        if(endpoint)await stormRingEndpointRuns.get(endpoint.id)?.catch(()=>{});
+        controller.signal.throwIfAborted();
         previous=await (endpoint?executeEndpointChat(step,controller.signal,job,endpoint):execute(step,controller.signal,job));const executionMs=performance.now()-started;
         previous.measurement={startedAt:previous.recoveredFrom?null:startedAt,finishedAt:new Date().toISOString(),executionMs:previous.recoveredFrom?null:executionMs,prepareMs:previous.recoveredFrom?null:prepareMs,resources:endpoint||previous.recoveredFrom?null:summarizeResources(samples)};if(previous.recoveredFrom)previous.reusedFrom=previous.recoveredFrom;
-        const output={task:s.task,model:s.model,...(s.task==='rerank'?{documents:s.documents}:{}),...previous};job.outputs.push(output);
-        try{const origin=previous.recoveredFrom,measuredJob=origin?jobs.find(j=>j.id===origin.runId) || job:job,record=createMetric({job:measuredJob,step,index:origin?.step ?? i,output,...previous.measurement,connectionId:job.connectionId,model:endpoint?undefined:cached.models.find(m=>m.id===s.model)});if(origin&&metricStore.ids.has(record.id))await metricStore.update(record);else await metricStore.add(record);}catch(e){job.metricsError=e.message;}
+        const output={task:s.task,model:s.model,...(endpoint?{endpointName:endpoint.name}:{}),...(s.task==='rerank'?{documents:s.documents}:{}),...previous};job.outputs.push(output);
+        try{const origin=previous.recoveredFrom,measuredJob=origin?jobs.find(j=>j.id===origin.runId) || job:job,record=createMetric({job:measuredJob,step,index:origin?.step ?? i,output,...previous.measurement,connectionId:measurementConnection,model:endpoint?undefined:cached.models.find(m=>m.id===s.model)});if(origin&&metricStore.ids.has(record.id))await metricStore.update(record);else await metricStore.add(record);}catch(e){job.metricsError=e.message;}
         // Capability checks save their single output during restoration and finalization.
         if(!job.checkTask)await saveJobs();
         if(job.museum){applyMuseumOutput(job,i);await saveJobs();}
         if(job.film){await processFilmClip(job,i,controller.signal);previous=output;}
-      }catch(e){try{if(!job.recoveringNative)await metricStore.add(createMetric({job:{...job,status:controller.signal.aborted?'cancelled':'failed'},step,index:i,startedAt,finishedAt:new Date().toISOString(),executionMs:performance.now()-started,prepareMs,resources:endpoint?null:summarizeResources(samples),connectionId:job.connectionId,model:endpoint?undefined:cached.models.find(m=>m.id===s.model)}));}catch{}throw e;}
+      }catch(e){try{if(!job.recoveringNative)await metricStore.add(createMetric({job:{...job,status:controller.signal.aborted?'cancelled':'failed'},step,index:i,startedAt,finishedAt:new Date().toISOString(),executionMs:performance.now()-started,prepareMs,resources:endpoint?null:summarizeResources(samples),connectionId:measurementConnection,model:endpoint?undefined:cached.models.find(m=>m.id===s.model)}));}catch{}throw e;}
       finally{clearInterval(sampler);}
     }
     if(job.film?.nativeClip){
@@ -987,7 +1013,7 @@ async function startQueue(){
       for(const id of job.originalModels)if(!live.some(m=>m.id===id)){await startModel(id);await waitModel(id,true);}
       job.restoredModels=true;
     }catch(e){job.restoreError='Model restoration needs attention: '+e.message;}}}
-    job.status=finalStatus;job.finishedAt=new Date().toISOString();delete job.file;for(const s of job.steps){delete s.file;delete s.messages;}vaultReferences.delete(job);endpointRuns.delete(job);controllers.delete(job.id);await saveFinishedJob(job);
+    job.status=finalStatus;job.finishedAt=new Date().toISOString();delete job.file;for(const s of job.steps){delete s.file;delete s.messages;}vaultReferences.delete(job);endpointRuns.delete(job);workflowEndpointRuns.delete(job);controllers.delete(job.id);await saveFinishedJob(job);
     if(job.checkTask){
       const connection=await config(),report=await readJSON('readiness.json',{checks:[]});
       const checks=report.endpoint===connection.endpoint?report.checks:[];
@@ -1035,10 +1061,11 @@ async function cancel(job){
   if(!['queued','running'].includes(job.status)||job.phase==='Restoring your loaded models'||(job.meetingSummaryOf&&job.outputs.length===job.steps.length))throw Error('This run can no longer be stopped.');
   vaultReferences.delete(job);
   endpointRuns.delete(job);
+  workflowEndpointRuns.delete(job);
   job.status='cancelled';controllers.get(job.id)?.abort();
   try{
     if(job.remote){const r=job.remote;await remote(r.task==='video'?'/v1/videos/'+encodeURIComponent(r.id):meshRoute('/v1/3d/tasks/'+encodeURIComponent(r.id)+'/cancel',r.model),{method:r.task==='video'?'DELETE':'POST',timeout:10000});}
-    else if(!job.endpointId&&job.startedAt&&(!job.film||job.film.stage==='generating')&&job.soundtrack?.stage!=='mixing'&&job.phase!=='Packing the offline 3D museum'&&!job.phase?.startsWith('Refreshing public')){const model=job.steps[job.currentStep || 0]?.model;if(model)await remote('/api/v1/models/'+encodeURIComponent(model)+'/interrupt',{method:'POST',timeout:10000});}
+    else if(!job.endpointId&&!job.steps[job.currentStep || 0]?.endpointId&&job.startedAt&&(!job.film||job.film.stage==='generating')&&job.soundtrack?.stage!=='mixing'&&job.phase!=='Packing the offline 3D museum'&&!job.phase?.startsWith('Refreshing public')){const model=job.steps[job.currentStep || 0]?.model;if(model)await remote('/api/v1/models/'+encodeURIComponent(model)+'/interrupt',{method:'POST',timeout:10000});}
   }finally{await saveJobs();}
 }
 const foleyCriteria={footsteps:'Audible walking, running, pacing or approaching steps.',door:'A door, gate, lock, hinge or latch moves audibly.',rain:'Audible rainfall, drizzle or drops landing as weather.',thunder:'An audible thunderclap or thunder rumble.',glass:'Glass audibly breaks, cracks or shatters.',heartbeat:'An audible or vividly foregrounded heartbeat, pulse or pounding heart.',silence:'None of these six sounds occurs in the present beat. A merely imagined, feared, remembered, intended, or negated event does not count.'};
@@ -1136,49 +1163,89 @@ async function deviceLedger(startDate){
   ledgerRequests.set(key,request);
   try{return await request;}finally{ledgerRequests.delete(key);}
 }
-async function eyewallTiinyModels(connection,signal){
+async function stormRingTiinyModels(connection,signal){
   const id=connectionHash(connection);
   if(cached?.connectionId!==id)await inventory();
   const live=list(await remoteJSON('/v1/models',{connection,transport:'openai',timeout:5000,signal,responseLimit:256*1024}));
   return (cached?.connectionId===id?cached.models:[]).filter(model=>model.installed&&model.tasks.includes('chat')&&live.some(item=>item.id===model.id));
 }
-async function eyewallModels(){
+const stormRingTiinyBusy=()=>deviceControl||chatPreload||cueRequests||previewInference||
+  jobs.some(job=>['queued','running'].includes(job.status)&&!job.endpointId&&!job.steps.every(step=>step.endpointId));
+const stormRingEndpointBusy=id=>stormRingEndpointRuns.has(id)||
+  jobs.some(job=>job.status==='running'&&(job.endpointId===id||job.steps[job.currentStep]?.endpointId===id));
+async function stormRingModels(allowCloud=false){
   const connection=await config().catch(()=>null);
-  const models=connection?await eyewallTiinyModels(connection).catch(()=>[]):[];
+  const models=connection?await stormRingTiinyModels(connection).catch(()=>[]):[];
   const preferred=connection?defaultChatModel(connectionHash(connection)):'';
   const tiiny=models.map(model=>({model:model.id,name:model.name,provider:'Tiiny',preferred:model.id===preferred}));
-  const endpoints=customEndpoints.list().filter(profile=>!profile.needsKey&&profile.kind!=='cloud'&&isLocalEyewallEndpoint(profile.url));
-  return [...tiiny,...endpoints.flatMap(profile=>profile.models.map(model=>({endpointId:profile.id,model,name:model,provider:profile.name})))];
+  const endpoints=customEndpoints.list().filter(profile=>!profile.needsKey&&
+    (profile.kind==='cloud'?allowCloud:isLocalStormRingEndpoint(profile.url)));
+  return [...tiiny,...endpoints.flatMap(profile=>profile.models.map(model=>({endpointId:profile.id,model,name:model,provider:profile.name,...(profile.kind==='cloud'?{cloud:true}:{})})))];
 }
-async function reviewEyewall({model,endpointId}){
-  const signal=AbortSignal.timeout(95_000);
+async function stormRingTarget({model,endpointId},allowCloud){
+  if(typeof model!=='string'||!model||model.length>256||
+    (endpointId!==undefined&&(typeof endpointId!=='string'||!endpointId||endpointId.length>80)))throw Error('Choose a Spindle chat model.');
   if(endpointId){
     const endpoint=customEndpoints.forRun(endpointId,model);
-    if(endpoint.kind==='cloud'||!isLocalEyewallEndpoint(endpoint.url))throw Error('Choose Tiiny or a configured endpoint at a local address.');
-    return eyewall.triage({id:endpointId,model,provider:endpoint.name},async messages=>{
+    if(endpoint.kind==='cloud'?!allowCloud:!isLocalStormRingEndpoint(endpoint.url))throw Error('Choose Tiiny, a local endpoint, or explicitly enable a Cloud endpoint.');
+    if(stormRingEndpointBusy(endpointId))throw Error('The selected endpoint is already working.');
+    const response=await endpointRequest(endpoint,'/models',{signal:AbortSignal.timeout(3500)});
+    let models;
+    try{models=list(JSON.parse(await boundedDeviceText(response,256*1024)));}
+    catch{throw Error('The selected endpoint did not return a readable model list.');}
+    if(!models.some(item=>item.id===model))throw Error('The selected endpoint has not reported that model.');
+    if(stormRingEndpointBusy(endpointId))throw Error('The selected endpoint is already working.');
+    return {model,endpoint};
+  }
+  if(stormRingTiinyBusy())throw Error('Tiiny is busy.');
+  const connection=await config();
+  const loaded=(await stormRingTiinyModels(connection,AbortSignal.timeout(5000))).find(entry=>entry.id===model);
+  if(!loaded)throw Error('Load a chat model on Tiiny first.');
+  if(stormRingTiinyBusy())throw Error('Tiiny is busy.');
+  return {model,connection,loaded};
+}
+async function reviewStormRing({model,endpointId,fallback,allowCloud}){
+  let target,reason;
+  try{target=await stormRingTarget({model,endpointId},allowCloud);}
+  catch(error){reason=error.message;}
+  if(!target&&fallback&&(fallback.model!==model||fallback.endpointId!==endpointId)){
+    try{target=await stormRingTarget(fallback,allowCloud);}
+    catch(error){throw Error(reason+' Alternate: '+error.message);}
+  }
+  if(!target)throw Error(reason||'No selected model is ready.');
+  const signal=AbortSignal.timeout(95_000);
+  const {endpoint,connection,loaded}=target;
+  model=target.model;
+  if(endpoint){
+    if(stormRingEndpointBusy(endpoint.id))throw Error('The selected endpoint is already working.');
+    const review=stormRing.triage({id:endpoint.id,model,provider:endpoint.name},async messages=>{
       const body={model,messages,temperature:0,stream:true};
       try{
         const {result}=await requestChatResponse(requestSignal=>endpointRequest(endpoint,'/chat/completions',{body,signal:requestSignal}),{signal,service:'the custom endpoint'});
         return result.text;
       }catch(error){throw Error(redactError(error,[endpoint.key]));}
     });
+    stormRingEndpointRuns.set(endpoint.id,review);
+    try{return {...await review,reviewedBy:endpoint.name};}finally{stormRingEndpointRuns.delete(endpoint.id);}
   }
-  const connection=await config();
-  const loaded=(await eyewallTiinyModels(connection,signal)).find(entry=>entry.id===model);
-  if(!loaded)throw Error('Load a chat model in Spindle Models before reviewing headlines.');
-  if(chatDefaultBusy())throw Error('Spindle has another task waiting. Try the headline review again when it finishes.');
-  return eyewall.triage({id:connectionHash(connection),model,provider:'Tiiny'},async messages=>{
+  if(stormRingTiinyBusy())throw Error('Tiiny has another task waiting. Try the headline review again.');
+  previewInference=stormRing.triage({id:connectionHash(connection),model,provider:'Tiiny'},async messages=>{
     const body={...chatSampleSettings(loaded),model,messages,temperature:0,stream:true};
     const {result}=await requestChatResponse(requestSignal=>remote(tasks.chat.route,{method:'POST',transport:'openai',body,signal:requestSignal,connection,timeout:null}),{signal});
     return result.text;
   });
+  try{return {...await previewInference,reviewedBy:'Tiiny'};}finally{previewInference=null;}
 }
 const server=http.createServer(async(req,res)=>{
   try{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cross-Origin-Resource-Policy','same-origin');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    const u=new URL(req.url,'http://127.0.0.1:'+PORT),p=u.pathname;
+    const u=new URL(req.url,'http://127.0.0.1:'+PORT);
+    const p=u.pathname.replace(/^\/(api\/)?eyewall(?=\/|$)/,'/$1storm-ring');
     const denied=requestAccess(req,{port:PORT,secret,pathname:p});if(denied){send(res,{error:denied.error},denied.status);return;}
+    if(req.method==='GET'&&/^\/eyewall\/?$/.test(u.pathname)){
+      res.writeHead(302,{Location:'/storm-ring/'+u.search});res.end();return;
+    }
     if(process.env.SPINDLE_DEMO==='1'&&(!['GET','HEAD'].includes(req.method)||p==='/api/museum/source')){
       send(res,{error:'The illustration demo is read-only. Open your regular Spindle session to run jobs or make changes.'},403);return;
     }
@@ -1205,22 +1272,18 @@ const server=http.createServer(async(req,res)=>{
         send(res,{...(saved||{tasks,models:[],syncedAt:null}),offline:true,error:e.message});
       }return;
     }
-    if(p==='/api/eyewall/reports'&&req.method==='GET'){
-      send(res,{...eyewall.state(),readOnly:process.env.SPINDLE_DEMO==='1'});return;
+    if(p==='/api/storm-ring/reports'&&req.method==='GET'){
+      send(res,simulateStormRing?demoStormRingState():{...stormRing.state(),readOnly:process.env.SPINDLE_DEMO==='1'});return;
     }
-    if(p==='/api/eyewall/models'&&req.method==='GET'){
-      send(res,process.env.SPINDLE_DEMO==='1'?[]:await eyewallModels());return;
+    if(p==='/api/storm-ring/models'&&req.method==='GET'){
+      send(res,process.env.SPINDLE_DEMO==='1'?[]:await stormRingModels(u.searchParams.get('cloud')==='1'));return;
     }
-    if(p==='/api/eyewall/refresh'&&req.method==='POST'){
-      await jsonBody(req,1024);send(res,await eyewall.refresh());return;
+    if(p==='/api/storm-ring/refresh'&&req.method==='POST'){
+      await jsonBody(req,1024);send(res,await stormRing.refresh());return;
     }
-    if(p==='/api/eyewall/triage'&&req.method==='POST'){
-      const {model,endpointId}=await jsonBody(req,2048);
-      if(typeof model!=='string'||!model||model.length>256||
-        (endpointId!==undefined&&(typeof endpointId!=='string'||!endpointId||endpointId.length>80)))throw Error('Choose a Spindle chat model.');
-      if(chatDefaultBusy()||chatPreload||previewInference)throw Error('Spindle is busy. Try the headline review again when the current task finishes.');
-      previewInference=reviewEyewall({model,endpointId});
-      try{send(res,await previewInference);}finally{previewInference=null;}
+    if(p==='/api/storm-ring/triage'&&req.method==='POST'){
+      const {model,endpointId,fallback,allowCloud}=await jsonBody(req,4096);
+      send(res,await reviewStormRing({model,endpointId,fallback,allowCloud:allowCloud===true}));
       return;
     }
     if(p==='/api/endpoints'&&req.method==='GET'){send(res,customEndpoints.list());return;}
@@ -1229,7 +1292,7 @@ const server=http.createServer(async(req,res)=>{
     }
     if(p==='/api/endpoints/remove'&&req.method==='POST'){
       const {id}=await jsonBody(req,1024);
-      if(jobs.some(job=>job.endpointId===id&&['queued','running'].includes(job.status)))throw Error('Stop or finish chats using this endpoint before removing it.');
+      if(stormRingEndpointRuns.has(id)||jobs.some(job=>['queued','running'].includes(job.status)&&(job.endpointId===id||job.steps.some(step=>step.endpointId===id))))throw Error('Stop or finish runs using this endpoint before removing it.');
       send(res,await customEndpoints.remove(id));return;
     }
     if(p==='/api/chat/default'&&req.method==='POST'){
@@ -1654,8 +1717,31 @@ const server=http.createServer(async(req,res)=>{
     if(p==='/api/workflows'&&req.method==='GET'){send(res,workflows);return;}
     if(p==='/api/workflows'&&req.method==='POST'){
       const w=await jsonBody(req);if(!w.name?.trim()||!Array.isArray(w.steps)||!w.steps.length)throw new Error('Give this workflow a name and at least one step.');
-      const saved={id:workflows.some(x=>x.id===w.id)?w.id:randomUUID(),name:w.name,steps:w.steps.map(({task,model,prompt,params,fileFrom,documents})=>({task,model,prompt,params,fileFrom,documents})),updatedAt:new Date().toISOString()};
+      const saved={id:workflows.some(x=>x.id===w.id)?w.id:randomUUID(),name:w.name,steps:w.steps.map(({task,model,prompt,params,fileFrom,documents,endpointId})=>({task,model,prompt,params,fileFrom,documents,endpointId})),updatedAt:new Date().toISOString()};
       workflows=workflows.filter(x=>x.id!==saved.id);workflows.push(saved);await writeJSON('workflows.json',workflows);send(res,saved);return;
+    }
+    if(p==='/api/workflow/run'&&req.method==='POST'){
+      const b=await jsonBody(req);
+      if(!Array.isArray(b.steps)||!b.steps.length||b.steps.length>30)throw Error('Workflows need 1–30 steps.');
+      const targets=b.steps.map(step=>{
+        if(!tasks[step?.task]||typeof step.model!=='string'||!step.model)throw Error('Choose an exact model for every step.');
+        if(!step.endpointId)return null;
+        if(step.task!=='chat'||step.fileFrom&&step.fileFrom!=='none')throw Error('Custom and cloud workflow steps accept text only.');
+        if(b.confirmEndpoints!==true)throw Error('Confirm where workflow text will be sent before running.');
+        return customEndpoints.forRun(step.endpointId,step.model);
+      });
+      const catalog=targets.every(Boolean)?null:cached||await inventory();
+      const destinationParams=['max_tokens','max_completion_tokens','temperature','top_p','_spindleStream'];
+      const steps=b.steps.map((step,index)=>{
+        const {task,model,fileFrom,documents}=step,prompt=typeof step.prompt==='string'?step.prompt:'';
+        const endpoint=targets[index];
+        if(!endpoint&&!catalog.models.some(item=>item.id===model&&item.installed&&item.tasks.includes(task)))throw Error('Choose a downloaded Tiiny model compatible with each device step.');
+        const params=endpoint?Object.fromEntries(Object.entries(step.params??{}).filter(([name])=>destinationParams.includes(name))):step.params;
+        if(endpoint)chatSettings(params);
+        return {task,model,prompt,params,fileFrom,documents,...(endpoint?{endpointId:endpoint.id,endpointName:endpoint.name}:{})};
+      });
+      const j=await enqueueRun({name:b.name,input:b.input,file:b.file,steps,switchModels:b.switchModels},null,null,targets);
+      send(res,redactJob(j),202);void startQueue();return;
     }
     if(p==='/api/mesh/texture'&&req.method==='POST'){
       const {id,step,switchModels}=await jsonBody(req);
@@ -1773,11 +1859,11 @@ const server=http.createServer(async(req,res)=>{
       res.end(game);return;
     }
     let file,mime;
-    const eyewallAsset=p==='/eyewall/'?'index.html':p.startsWith('/eyewall/')?p.slice('/eyewall/'.length):'';
-    if(eyewallAssets.has(eyewallAsset)){
-      file=path.join(ROOT,'public','eyewall',eyewallAsset);mime=eyewallAssets.get(eyewallAsset);
-    }else if(p==='/eyewall'&&req.method==='GET'){
-      res.writeHead(302,{Location:'/eyewall/'});res.end();return;
+    const stormRingAsset=p==='/storm-ring/'?'index.html':p.startsWith('/storm-ring/')?p.slice('/storm-ring/'.length):'';
+    if(stormRingAssets.has(stormRingAsset)){
+      file=path.join(ROOT,'public','storm-ring',stormRingAsset);mime=stormRingAssets.get(stormRingAsset);
+    }else if(p==='/storm-ring'&&req.method==='GET'){
+      res.writeHead(302,{Location:'/storm-ring/'});res.end();return;
     }else if(['/samples/star.png','/samples/document.png','/samples/speech.wav','/samples/'+voiceReferenceSample.sample].includes(p)){file=path.join(ROOT,'fixtures',path.basename(p));mime=p.endsWith('.wav')?'audio/wav':'image/png';}
     else if(p==='/catalog.json'){file=path.join(DATA,'catalog.json');mime='application/json';}
     else if(p==='/catalog.csv'){file=path.join(DATA,'catalog.csv');mime='text/csv';}
@@ -1788,7 +1874,7 @@ const server=http.createServer(async(req,res)=>{
     }else{send(res,{error:'Not found'},404);return;}
     if(/^(audio|video)\//.test(mime)&&['GET','HEAD'].includes(req.method)){await sendMedia(req,res,file,mime);return;}
     const index=p==='/'||p==='/index.html';
-    const workspaceEntry=index||eyewallAsset==='index.html';
+    const workspaceEntry=index||stormRingAsset==='index.html';
     const bytes=index?(await fs.readFile(file,'utf8')).replace('<!-- spindle-version -->',version):await fs.readFile(file);
     res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
       ...(workspaceEntry?{'Set-Cookie':'spindle='+secret+'; HttpOnly; SameSite=Strict; Path=/'}:{}),...(p.startsWith('/assets/')&&mime==='text/html'?{'Content-Disposition':'attachment; filename="tiinyverse-museum.html"'}:{})});res.end(bytes);
