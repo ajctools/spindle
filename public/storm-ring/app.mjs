@@ -75,8 +75,11 @@ function choose(id, control) {
 
 function renderList(records) {
   const rows = records.map(record => {
+    const first = record.events[0];
+    const latest = record.events.at(-1);
+    const eventDate = event => el('span', { class: 'row-event-date' }, event.label + ' · ', time(event.date));
     const row = button(
-      el('span', { class: 'row-meta' }, categoryTag(record), time(record.events.at(-1).date)),
+      el('span', { class: 'row-meta' }, categoryTag(record), eventDate(first)),
       () => choose(record.id, 'row'),
       { class: 'incident-row', 'aria-pressed': selection === record.id, 'data-row': record.id },
     );
@@ -84,6 +87,7 @@ function renderList(records) {
       el('span', { class: 'row-title' }, record.title),
       el('span', { class: 'row-subtitle' }, record.geo.label),
     );
+    if (latest.date !== first.date) row.append(eventDate(latest));
     return el('li', {}, row);
   });
   list.replaceChildren(rows.length
@@ -215,7 +219,7 @@ function render(refreshPins = true) {
     const fields = [record.title, categories[record.category], record.geo.label, record.attribution, record.summary,
       ...record.events.flatMap(event => [event.title, event.source, event.text])];
     return (!category || category === record.category) && fields.some(field => field.toLowerCase().includes(query));
-  }).sort((a, b) => b.events.at(-1).date.localeCompare(a.events.at(-1).date));
+  }).sort((a, b) => b.events[0].date.localeCompare(a.events[0].date));
   activeCase = records.find(record => record.id === selection) ?? records[0];
   selection = activeCase?.id ?? selection;
   $('#count').textContent = records.length;

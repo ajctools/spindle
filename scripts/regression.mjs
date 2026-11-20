@@ -376,6 +376,11 @@ async function smokeBrowser(profile){
     await click('#storm-ring-pulse');
     await waitFor('focused simulated report',()=>evaluate(`document.activeElement?.matches('.report-card') && document.activeElement.textContent.includes('Simulation')`));
     assert.match(await evaluate('location.hash'),/^#live\/[0-9a-f]{24}$/);
+    const huggingFaceDates=await evaluate(`Array.from(document.querySelectorAll('[data-row="hugging-face"] time'),node=>[node.dateTime,node.parentElement.textContent])`);
+    assert.equal(huggingFaceDates[0][0],'2026-07-16');
+    assert.match(huggingFaceDates[0][1],/First public report/);
+    assert.equal(huggingFaceDates[1][0],'2026-11-16');
+    assert.match(huggingFaceDates[1][1],/Legal filing/);
     await call('Page.navigate',{url:origin+'/?view=dashboard'});
     await waitForElement('#storm-ring-pulse');
     assert.equal(await evaluate(`document.querySelector('#storm-ring-pulse').getAttribute('href')`),'/storm-ring/#live');
